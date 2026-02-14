@@ -1,0 +1,32 @@
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# Gradle
+.gradle/
+build/
+kotlin/build/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+*.egg
+
+# Taichi
+_ti_generated_tmp/
+
+# Data (persisted volumes, not tracked)
+data/genomes/
+data/replays/
+data/checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db

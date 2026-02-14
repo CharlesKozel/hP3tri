@@ -1,0 +1,4 @@
+numpy>=1.26
+jep>=4.2.1
+taichi>=1.7
+pytest>=8.0
