@@ -27,6 +27,10 @@ data/genomes/
 data/replays/
 data/checkpoints/
 
+# Web
+web/node_modules/
+web/dist/
+
 # OS
 .DS_Store
 Thumbs.db

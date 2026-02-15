@@ -25,6 +25,12 @@ This project is a **2D artificial life evolution simulator** where genetically d
 - **Kotlin (JVM)**: Primary language. Owns the orchestrator layer — evolution loop, tournament management, genome management, configuration, match coordination, serialization, CLI/entry point.
 - **Python**: Simulation computation layer. Owns the GPU-acceleratable simulation kernel, CPPN evaluation, and any ML workloads. Called from Kotlin via Jep (Java Embedded Python).
 
+### Coding Standards:
+- Always use 4 spaces for indentation.
+
+#### **Python**:
+ - ALWAYS include type hints and type annotations were possible.
+
 ### Key Libraries & Frameworks
 - **Jep (Java Embedded Python)**: Embeds a Python interpreter inside the JVM process. Kotlin calls Python functions directly with near-zero overhead. NumPy arrays can be shared with minimal copying. This avoids subprocess/serialization overhead of a client-server architecture.
 - **Taichi Lang** (Python): GPU-acceleratable simulation kernels. Compiles Python-like code to CUDA/OpenCL/CPU-LLVM. Supports hex grid simulations natively. CPU mode is fast enough for development; GPU mode for production evolution runs.
@@ -111,9 +117,10 @@ All behind clean interfaces. Implementations can be swapped via configuration:
 
 ### Hex Grid
 - **Coordinate system**: Axial coordinates (q, r). Each hex has exactly 6 equidistant neighbors.
+- **Toroidal topology**: the grid wraps in both axes — coordinate `width` maps back to `0`, and `-1` maps to `width-1` (same for height). All coordinate functions (`neighbors`, `hex_distance`, `line_of_sight`) account for wrapping and return the shortest toroidal path. There are no edges or corners; every tile has exactly 6 neighbors.
 - **Why hex**: eliminates diagonal movement ambiguity of square grids, produces natural organic shapes, rotation is a clean coordinate transform (6 orientations at 60° increments), uniform distance in all directions.
 - **Grid contents**: each hex tile has two layers: a **terrain type** (ground, water, rock, fertile soil, toxic, etc.) and **contents** (empty, resource, or organism cell). Terrain is the floor; organisms and resources sit on top. A water tile can contain a swimming organism's cell. A rock tile is impassable.
-- **Tile state**: terrain type enum, contents enum, cell type enum, owner organism ID, energy content (for resource tiles), chemical signal levels.
+- **Tile state**: terrain type enum, contents enum, cell type enum, owner organism ID.
 
 ### Organisms
 An organism is a **coherent entity** composed of contiguous cells on the hex grid. It is NOT an agent floating above the grid — its cells physically occupy hex tiles.
@@ -150,8 +157,8 @@ The full cell type roster is a design/balance parameter — start with ~20 core 
 - Mouth cells transfer energy from consumed food/cells to the organism's pool.
 - Movement costs energy proportional to organism mass (cell count). Terrain modifies cost (water may reduce movement cost for aquatic organisms).
 - Growth (adding a new cell) costs energy dependent on cell type.
-- Reproduction costs a configurable amount of energy (transferred to offspring as starting energy).
-- If energy reaches zero, cells begin dying (starvation) — outermost cells first.
+- Reproduction costs energy proportional to the new cells generated, + energy transferred to offspring as starting energy, + base reproduction cost.
+- If energy reaches zero, cells begin dying (starvation).
 
 ---
 
@@ -550,12 +557,12 @@ When ready, replace rule-based brain with a fixed-topology NN:
 ### Organism Contract (unified interface)
 The simulator doesn't know or care whether an organism is evolved, manual, or NPC. All satisfy the same interface:
 
-| | Evolved | Manual | NPC |
-|---|---|---|---|
-| Body plan | CPPN query | Lookup table | Lookup table |
-| Brain | Rule-based / NN | Behavior tree | Hardcoded script |
-| Metabolism | Evolved params | Hand-tuned | Hand-tuned |
-| Reproduction | Clones (in match) | Clones or disabled | Clones |
+|              | Evolved           | Manual             | NPC              |
+|--------------|-------------------|--------------------|------------------|
+| Body plan    | CPPN query        | Lookup table       | Lookup table     |
+| Brain        | Rule-based / NN   | Behavior tree      | Hardcoded script |
+| Metabolism   | Evolved params    | Hand-tuned         | Hand-tuned       |
+| Reproduction | Clones (in match) | Clones or disabled | Clones           |
 
 ### Seeding Evolution from Manual Designs
 - Optionally train a CPPN to approximate a manual body plan (supervised: minimize cell-type error across hex positions). This produces a CPPN genome that reproduces the manual design and can then be evolved via normal mutation. Gives evolution a head start.
@@ -570,7 +577,7 @@ Build in this order. Each phase produces a runnable, testable system.
 - Implement hex grid with axial coordinates in Python (Taichi-compatible data layout).
 - Tile state: terrain type, cell type, organism ID, energy. **Include terrain layer in data structure from day one** (initialized to "ground" everywhere) so adding terrain types later is purely additive.
 - Hex coordinate math: neighbors, distance, line-of-sight.
-- Basic visualization (terminal/ASCII or simple graphical output).
+- Basic visualization, simple web server to render a hex grid state. React.js that interacts with Kotlin. 
 - **Deliverable**: a hex grid you can programmatically place cells on and display.
 
 ### Phase 2: Manual Organisms & Basic Simulation
@@ -632,23 +639,24 @@ Build in this order. Each phase produces a runnable, testable system.
 
 Decisions made during design, with rationale. Do not revisit without good reason.
 
-| Decision | Rationale |
-|---|---|
-| Hex grid, not square | Uniform distance in all directions, natural organic shapes, clean rotation (6 orientations), eliminates diagonal ambiguity |
-| Organisms are cells on the grid, not floating agents | Cell-level destruction requires physical grid positions. Growth, combat, and regeneration are all grid operations. Surface area is trivially measured. GPU-friendly (uniform grid update). |
-| Organisms are also logical entities with shared energy and brain | Cells alone can't coordinate. Shared energy pool and brain enable organism-level strategy while cells handle local mechanics. |
-| CPPN for body plan encoding | Compact genome, natural symmetry support, continuous/smooth fitness landscape, temporal development via age input. Superior to direct encoding (too large, not evolvable) and GRN (too complex to evolve from scratch). |
-| Fixed CPPN topology to start | Simple, GPU-batchable, straightforward crossover. Upgrade to NEAT later if needed. |
-| Rule-based brain to start | Eliminates brain-body coupling problem, no training needed, sufficient for diverse strategies, simple to debug. Upgrade to NN later. |
-| Body-invariant sensor abstraction | Decouples brain from body. Body mutations don't break the brain. More sensor cells = better accuracy, not different input format. |
-| Evolution between matches, not during | Clean separation of fitness evaluation (simulation) and evolution (outer loop). Offspring in-match are clones. Simpler to implement and reason about. |
-| Tournament-based evolution | Well-understood, configurable, supports diverse matchmaking strategies. Fitness is relative (competitive), not absolute. |
-| Disconnected cell clusters die | Avoids complex multi-entity splitting. Keeps organism integrity simple. Severing an organism is tactically meaningful (kills the smaller piece). |
-| Kotlin orchestrator + Python simulation via Jep | Best of both worlds: Kotlin's type safety and expressiveness for the complex orchestration logic; Python's GPU ecosystem (Taichi) for the simulation kernel. Jep avoids subprocess overhead. |
-| Docker deployment | Reproducible environment. Solves Jep/CUDA dependency management. GPU passthrough on Linux/Windows, CPU fallback on Mac. |
-| CPU-first development | Get architecture right before optimizing. Taichi CPU mode is fast enough for development. GPU port is a well-defined later phase. |
-| Deterministic simulation | Enables exact replay of matches. Required for debugging and visualization. Achieved via seeded PRNG and deterministic tiebreaking. |
-| Terrain as separate grid layer | Terrain is a static background layer; organisms/resources sit on top. Minimal GPU cost (one extra int per tile). Design into data structure from Phase 1, implement terrain types in Phase 8. Enables aquatic/terrestrial specialization and niche diversity. |
+| Decision                                                         | Rationale                                                                                                                                                                                                                                                     |
+|------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Hex grid, not square                                             | Uniform distance in all directions, natural organic shapes, clean rotation (6 orientations), eliminates diagonal ambiguity                                                                                                                                    |
+| Toroidal grid topology                                           | Eliminates edge effects and corner asymmetry. Every tile has exactly 6 neighbors. Organisms cannot be trapped against walls. Simulates an unbounded surface without infinite space.                                                                           |
+| Organisms are cells on the grid, not floating agents             | Cell-level destruction requires physical grid positions. Growth, combat, and regeneration are all grid operations. Surface area is trivially measured. GPU-friendly (uniform grid update).                                                                    |
+| Organisms are also logical entities with shared energy and brain | Cells alone can't coordinate. Shared energy pool and brain enable organism-level strategy while cells handle local mechanics.                                                                                                                                 |
+| CPPN for body plan encoding                                      | Compact genome, natural symmetry support, continuous/smooth fitness landscape, temporal development via age input. Superior to direct encoding (too large, not evolvable) and GRN (too complex to evolve from scratch).                                       |
+| Fixed CPPN topology to start                                     | Simple, GPU-batchable, straightforward crossover. Upgrade to NEAT later if needed.                                                                                                                                                                            |
+| Rule-based brain to start                                        | Eliminates brain-body coupling problem, no training needed, sufficient for diverse strategies, simple to debug. Upgrade to NN later.                                                                                                                          |
+| Body-invariant sensor abstraction                                | Decouples brain from body. Body mutations don't break the brain. More sensor cells = better accuracy, not different input format.                                                                                                                             |
+| Evolution between matches, not during                            | Clean separation of fitness evaluation (simulation) and evolution (outer loop). Offspring in-match are clones. Simpler to implement and reason about.                                                                                                         |
+| Tournament-based evolution                                       | Well-understood, configurable, supports diverse matchmaking strategies. Fitness is relative (competitive), not absolute.                                                                                                                                      |
+| Disconnected cell clusters die                                   | Avoids complex multi-entity splitting. Keeps organism integrity simple. Severing an organism is tactically meaningful (kills the smaller piece).                                                                                                              |
+| Kotlin orchestrator + Python simulation via Jep                  | Best of both worlds: Kotlin's type safety and expressiveness for the complex orchestration logic; Python's GPU ecosystem (Taichi) for the simulation kernel. Jep avoids subprocess overhead.                                                                  |
+| Docker deployment                                                | Reproducible environment. Solves Jep/CUDA dependency management. GPU passthrough on Linux/Windows, CPU fallback on Mac.                                                                                                                                       |
+| CPU-first development                                            | Get architecture right before optimizing. Taichi CPU mode is fast enough for development. GPU port is a well-defined later phase.                                                                                                                             |
+| Deterministic simulation                                         | Enables exact replay of matches. Required for debugging and visualization. Achieved via seeded PRNG and deterministic tiebreaking.                                                                                                                            |
+| Terrain as separate grid layer                                   | Terrain is a static background layer; organisms/resources sit on top. Minimal GPU cost (one extra int per tile). Design into data structure from Phase 1, implement terrain types in Phase 8. Enables aquatic/terrestrial specialization and niche diversity. |
 
 ---
 
@@ -671,7 +679,7 @@ Decisions made during design, with rationale. Do not revisit without good reason
 ### Data Layout for GPU Readiness
 Even during CPU phase, use data structures that map cleanly to GPU:
 - **Flat arrays** for grid state (not objects-per-tile).
-- **Struct-of-arrays** layout: separate arrays for cell_type[], organism_id[], energy[], etc. rather than array of cell structs. This is more cache-friendly and maps to GPU memory coalescing.
+- **Struct-of-arrays** layout: separate arrays for cell_type[], organism_id[], etc. rather than array of cell structs. This is more cache-friendly and maps to GPU memory coalescing.
 - **Fixed-size organism data**: cap organism data at fixed sizes (e.g., max 32×32 body plan). Pad smaller organisms. Enables uniform GPU processing.
 - **No per-cell heap allocation**: everything in pre-allocated arrays.
 
@@ -734,7 +742,6 @@ alife-simulator/
 │   │   ├── hex_grid.py                # Hex grid data structure, coordinate math
 │   │   ├── world.py                   # Tick loop orchestration
 │   │   ├── combat.py                  # Damage resolution
-│   │   ├── energy.py                  # Energy accounting
 │   │   ├── organism.py                # Organism entity management
 │   │   └── movement.py               # Movement mechanics
 │   ├── interfaces/
@@ -761,13 +768,11 @@ alife-simulator/
 │   ├── default_evolution.json
 │   ├── cell_types.json                # Cell type definitions, costs, interactions
 │   └── terrain_types.json             # Terrain type definitions, interaction rules
-├── data/                              # Mounted volume for persistence
-│   ├── genomes/
-│   ├── replays/
-│   └── checkpoints/
-└── tools/
-    ├── hex_editor/                    # Manual organism designer (future)
-    └── visualizer/                    # Match replay viewer (future)
+└── data/                              # Mounted volume for persistence
+    ├── genomes/
+    ├── replays/
+    └── checkpoints/
+
 ```
 
 ---
@@ -863,7 +868,7 @@ Example schema:
 
 Items explicitly deferred for later decision:
 
-- **Visualization technology**: OpenRNDR vs. web viewer vs. Taichi GUI. Decide during Phase 7.
+- **Visualization technology**: create a web view for overall status of simulations, and a visualizer for one match.
 - **NN brain architecture details**: hidden layer sizes, activation functions, recurrent connections. Decide when upgrading from rule-based brain.
 - **NEAT integration**: if/when fixed-topology CPPN proves limiting. Drop-in replacement for body plan genome.
 - **Chemical signaling system**: how organisms emit and sense chemicals. Adds communication and territory marking but increases simulation complexity.
