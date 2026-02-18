@@ -1,5 +1,5 @@
-import {useCallback, useEffect, useRef, useState} from 'react';
-import type {GridState, TileState} from '../types';
+import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import type {GridState, OrganismState, TileState} from '../types';
 import {
     CellType,
     CELL_COLORS,
@@ -77,9 +77,10 @@ function drawHex(
 
 interface Props {
     grid: GridState;
+    organisms?: OrganismState[];
 }
 
-export default function HexGridCanvas({grid}: Props) {
+export default function HexGridCanvas({grid, organisms}: Props) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [offset, setOffset] = useState({x: 40, y: 40});
     const [zoom, setZoom] = useState(1);
@@ -97,6 +98,16 @@ export default function HexGridCanvas({grid}: Props) {
         }
         tileMap.current = map;
     }, [grid]);
+
+    const organismMap = useMemo(() => {
+        const map = new Map<number, OrganismState>();
+        if (organisms) {
+            for (const org of organisms) {
+                map.set(org.id, org);
+            }
+        }
+        return map;
+    }, [organisms]);
 
     const draw = useCallback(() => {
         const canvas = canvasRef.current;
@@ -224,7 +235,12 @@ export default function HexGridCanvas({grid}: Props) {
         (hoverTile
             ? ` | Terrain: ${TERRAIN_TYPE_NAMES[hoverTile.terrainType] ?? 'Unknown'}` +
             (hoverTile.cellType !== CellType.EMPTY
-                ? ` | Cell: ${CELL_TYPE_NAMES[hoverTile.cellType] ?? 'Unknown'} | Organism: ${hoverTile.organismId}`
+                ? ` | Cell: ${CELL_TYPE_NAMES[hoverTile.cellType] ?? 'Unknown'}` +
+                ` | Organism: ${hoverTile.organismId}` +
+                (() => {
+                    const org = organismMap.get(hoverTile.organismId);
+                    return org ? ` | Energy: ${org.energy}` : '';
+                })()
                 : '')
             : ' | Ground')
         : '';

@@ -8,6 +8,9 @@ val ktor_version = "3.1.1"
 
 application {
     mainClass.set("dev.ckozel.alife.hp3tri.MainKt")
+    applicationDefaultJvmArgs = listOf(
+        "-Djava.library.path=${project.rootDir}/.venv/lib/python3.12/site-packages/jep",
+    )
 }
 
 dependencies {
@@ -21,7 +24,7 @@ dependencies {
     implementation("io.ktor:ktor-server-cors:$ktor_version")
 
     // Jep - Java Embedded Python
-    implementation("black.ninia:jep:4.2.1")
+    implementation("black.ninia:jep:4.3.1")
 
     testImplementation(kotlin("test"))
     testImplementation("org.junit.jupiter:junit-jupiter:5.11.3")
@@ -29,6 +32,12 @@ dependencies {
 
 tasks.test {
     useJUnitPlatform()
+}
+
+tasks.named<JavaExec>("run") {
+    workingDir = rootDir
+    val venvSitePackages = "${rootDir}/.venv/lib/python3.12/site-packages"
+    environment("PYTHONPATH", venvSitePackages)
 }
 
 kotlin {

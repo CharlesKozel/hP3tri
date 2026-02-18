@@ -23,7 +23,8 @@ This project is a **2D artificial life evolution simulator** where genetically d
 
 ### Languages
 - **Kotlin (JVM)**: Primary language. Owns the orchestrator layer — evolution loop, tournament management, genome management, configuration, match coordination, serialization, CLI/entry point.
-- **Python**: Simulation computation layer. Owns the GPU-acceleratable simulation kernel, CPPN evaluation, and any ML workloads. Called from Kotlin via Jep (Java Embedded Python).
+- **Python**: Simulation computation layer. Owns the GPU-acceleratable simulation kernel, CPPN evaluation, and any ML workloads. Called from Kotlin via Jep (Java Embedded Python). 
+  - Always use the project's Python venv for Python commands: prefix with `.venv/bin/` (e.g., `.venv/bin/python`, `.venv/bin/pytest`).
 
 ### Coding Standards:
 - Always use 4 spaces for indentation.
@@ -110,6 +111,68 @@ All behind clean interfaces. Implementations can be swapped via configuration:
 4. **Genome Representation** — the heritable data structure. Implementations: flat float vector, NEAT graph genome, composite genome.
 5. **Evolution Strategy** — match results → next generation. Implementations: tournament selection, Elo-rated, MAP-Elites, manual selection.
 6. **Match Configuration** — data-driven arena setup. Grid size, tick limit, resource distribution, competitor count, placement strategy.
+
+---
+
+
+## Implementation Phases
+
+Build in this order. Each phase produces a runnable, testable system.
+
+Current Phase: 2
+
+### Phase 2: Manual Organisms & Basic Simulation
+- Implement organism entity (ID, cell set, energy pool).
+- Lookup-table body plan provider.
+- Hardcoded/scripted brains for test organisms.
+- Implement the full tick loop: resource regen, sensor aggregation (basic), brain eval (scripted), action execution (growth, movement), combat resolution, energy accounting, death/cleanup.
+- Create 3-4 manual test organisms: a stationary plant, a moving herbivore, an armored defender, a predator.
+- Run matches between them. Verify mechanics work: growth, combat, movement, energy flow, starvation, regeneration.
+- **Deliverable**: a working petri dish simulator with hand-designed creatures competing.
+
+### Phase 3: Rule-Based Brain & Sensor Aggregation
+- Implement the body-invariant sensor aggregator.
+- Implement rule-based brain with configurable parameters.
+- Replace hardcoded brains on test organisms with rule-based brains (hand-tune parameters to replicate intended behavior).
+- Verify that organisms behave reasonably with the rule-based system.
+- **Deliverable**: autonomous organisms competing with parameterized behavior.
+
+### Phase 4: Genome, Mutation, and Basic Evolution
+- Implement the genome data structure (float vector encoding rule parameters + metabolic parameters).
+- Implement mutation and crossover operators.
+- Implement simple tournament evolution loop (Kotlin orchestrator).
+- Wire up Jep bridge: Kotlin sends genomes to Python, Python runs match, returns scores.
+- Use lookup-table body plans initially (randomly generated simple shapes, or evolve just brain/metabolism parameters with fixed bodies).
+- Run evolution for many generations. Verify fitness improves over time.
+- **Deliverable**: working evolutionary loop producing increasingly fit organisms.
+
+### Phase 5: CPPN Body Plan
+- Implement CPPN evaluation in Python.
+- Add CPPN weights and activation functions to genome.
+- Implement developmental growth from seed using CPPN queries.
+- Implement symmetry modes.
+- Evolve body plans along with brain parameters and metabolism.
+- **Deliverable**: organisms with evolved body shapes competing. This is where it gets interesting.
+
+### Phase 6: GPU Acceleration
+- Port the simulation tick kernel to Taichi.
+- Spatial hashing for neighbor queries.
+- Batch CPPN evaluation on GPU.
+- Benchmark: measure ticks/second at various grid sizes and organism counts.
+- **Deliverable**: GPU-accelerated simulation running significantly faster than CPU.
+
+### Phase 7: Visualization & Replay
+- Implement match replay recording (serialize grid state each tick, or record actions for deterministic replay).
+- Build a visualization tool to watch replays (OpenRNDR, web viewer, or Taichi GUI).
+- **Deliverable**: ability to watch evolved organisms compete visually.
+
+### Phase 8: Refinement & Expansion
+- Expand cell type roster toward ~100 types.
+- **Implement terrain types**: water, rock, fertile soil, toxic, etc. with interaction rules defined in config. Implement terrain map generation strategies (procedural generation of lakes, rock formations, fertile patches). Terrain data structure is already in grid from Phase 1.
+- Tune balance parameters (cell costs, damage values, energy rates, terrain modifiers).
+- Experiment with evolution strategies (MAP-Elites for diversity, Elo matchmaking).
+- Experiment with NN brains as upgrade from rule-based.
+- Add more visualization features (genome browser, phylogenetic trees, statistics).
 
 ---
 
@@ -566,72 +629,6 @@ The simulator doesn't know or care whether an organism is evolved, manual, or NP
 
 ### Seeding Evolution from Manual Designs
 - Optionally train a CPPN to approximate a manual body plan (supervised: minimize cell-type error across hex positions). This produces a CPPN genome that reproduces the manual design and can then be evolved via normal mutation. Gives evolution a head start.
-
----
-
-## 12. Implementation Phases
-
-Build in this order. Each phase produces a runnable, testable system.
-
-### Phase 1: Hex Grid & Core Data Structures
-- Implement hex grid with axial coordinates in Python (Taichi-compatible data layout).
-- Tile state: terrain type, cell type, organism ID, energy. **Include terrain layer in data structure from day one** (initialized to "ground" everywhere) so adding terrain types later is purely additive.
-- Hex coordinate math: neighbors, distance, line-of-sight.
-- Basic visualization, simple web server to render a hex grid state. React.js that interacts with Kotlin. 
-- **Deliverable**: a hex grid you can programmatically place cells on and display.
-
-### Phase 2: Manual Organisms & Basic Simulation
-- Implement organism entity (ID, cell set, energy pool).
-- Lookup-table body plan provider.
-- Hardcoded/scripted brains for test organisms.
-- Implement the full tick loop: resource regen, sensor aggregation (basic), brain eval (scripted), action execution (growth, movement), combat resolution, energy accounting, death/cleanup.
-- Create 3-4 manual test organisms: a stationary plant, a moving herbivore, an armored defender, a predator.
-- Run matches between them. Verify mechanics work: growth, combat, movement, energy flow, starvation, regeneration.
-- **Deliverable**: a working petri dish simulator with hand-designed creatures competing.
-
-### Phase 3: Rule-Based Brain & Sensor Aggregation
-- Implement the body-invariant sensor aggregator.
-- Implement rule-based brain with configurable parameters.
-- Replace hardcoded brains on test organisms with rule-based brains (hand-tune parameters to replicate intended behavior).
-- Verify that organisms behave reasonably with the rule-based system.
-- **Deliverable**: autonomous organisms competing with parameterized behavior.
-
-### Phase 4: Genome, Mutation, and Basic Evolution
-- Implement the genome data structure (float vector encoding rule parameters + metabolic parameters).
-- Implement mutation and crossover operators.
-- Implement simple tournament evolution loop (Kotlin orchestrator).
-- Wire up Jep bridge: Kotlin sends genomes to Python, Python runs match, returns scores.
-- Use lookup-table body plans initially (randomly generated simple shapes, or evolve just brain/metabolism parameters with fixed bodies).
-- Run evolution for many generations. Verify fitness improves over time.
-- **Deliverable**: working evolutionary loop producing increasingly fit organisms.
-
-### Phase 5: CPPN Body Plan
-- Implement CPPN evaluation in Python.
-- Add CPPN weights and activation functions to genome.
-- Implement developmental growth from seed using CPPN queries.
-- Implement symmetry modes.
-- Evolve body plans along with brain parameters and metabolism.
-- **Deliverable**: organisms with evolved body shapes competing. This is where it gets interesting.
-
-### Phase 6: GPU Acceleration
-- Port the simulation tick kernel to Taichi.
-- Spatial hashing for neighbor queries.
-- Batch CPPN evaluation on GPU.
-- Benchmark: measure ticks/second at various grid sizes and organism counts.
-- **Deliverable**: GPU-accelerated simulation running significantly faster than CPU.
-
-### Phase 7: Visualization & Replay
-- Implement match replay recording (serialize grid state each tick, or record actions for deterministic replay).
-- Build a visualization tool to watch replays (OpenRNDR, web viewer, or Taichi GUI).
-- **Deliverable**: ability to watch evolved organisms compete visually.
-
-### Phase 8: Refinement & Expansion
-- Expand cell type roster toward ~100 types.
-- **Implement terrain types**: water, rock, fertile soil, toxic, etc. with interaction rules defined in config. Implement terrain map generation strategies (procedural generation of lakes, rock formations, fertile patches). Terrain data structure is already in grid from Phase 1.
-- Tune balance parameters (cell costs, damage values, energy rates, terrain modifiers).
-- Experiment with evolution strategies (MAP-Elites for diversity, Elo matchmaking).
-- Experiment with NN brains as upgrade from rule-based.
-- Add more visualization features (genome browser, phylogenetic trees, statistics).
 
 ---
 

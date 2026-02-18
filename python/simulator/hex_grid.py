@@ -32,6 +32,7 @@ class CellType(IntEnum):
     REPRODUCTIVE = 16
     SIGNAL_EMITTER = 17
     PIGMENT = 18
+    SOFT_TISSUE = 19
 
 
 # Axial hex neighbor offsets (flat-top orientation)

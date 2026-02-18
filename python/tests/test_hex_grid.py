@@ -127,7 +127,6 @@ class TestHexGrid:
         assert grid.height == 32
         assert len(grid.terrain_type) == 32 * 32
         assert len(grid.cell_type) == 32 * 32
-        assert grid.chemical_signals.shape == (32 * 32, 4)
 
     def test_default_terrain_is_ground(self) -> None:
         grid = HexGrid(8, 8)

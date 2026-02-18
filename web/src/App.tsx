@@ -1,42 +1,191 @@
-import {useEffect, useState} from 'react';
+import {useCallback, useEffect, useRef, useState} from 'react';
 import HexGridCanvas from './components/HexGridCanvas';
-import type {GridState} from './types';
+import type {ReplayInfo, SimulationState} from './types';
 
 export default function App() {
-    const [grid, setGrid] = useState<GridState | null>(null);
+    const [replay, setReplay] = useState<SimulationState[] | null>(null);
+    const [replayInfo, setReplayInfo] = useState<ReplayInfo | null>(null);
+    const [currentTick, setCurrentTick] = useState(0);
+    const [playing, setPlaying] = useState(false);
+    const [playbackSpeed, setPlaybackSpeed] = useState(200);
     const [error, setError] = useState<string | null>(null);
+    const [loading, setLoading] = useState(true);
+    const intervalRef = useRef<number | null>(null);
 
-    useEffect(() => {
-        fetch('/api/grid')
-            .then((res) => {
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                return res.json();
-            })
-            .then((data: GridState) => setGrid(data))
-            .catch((err) => setError(err.message));
+    const fetchReplay = useCallback(async () => {
+        setLoading(true);
+        setError(null);
+        try {
+            const infoRes = await fetch('/api/replay/info');
+            if (!infoRes.ok) throw new Error(`HTTP ${infoRes.status}`);
+            const info: ReplayInfo = await infoRes.json();
+            setReplayInfo(info);
+
+            const replayRes = await fetch('/api/replay');
+            if (!replayRes.ok) throw new Error(`HTTP ${replayRes.status}`);
+            const frames: SimulationState[] = await replayRes.json();
+            setReplay(frames);
+            setCurrentTick(0);
+            setPlaying(true);
+        } catch (err) {
+            setError(err instanceof Error ? err.message : String(err));
+        } finally {
+            setLoading(false);
+        }
     }, []);
 
-    if (error) {
+    useEffect(() => {
+        fetchReplay();
+    }, [fetchReplay]);
+
+    useEffect(() => {
+        if (intervalRef.current !== null) {
+            clearInterval(intervalRef.current);
+            intervalRef.current = null;
+        }
+        if (playing && replay) {
+            intervalRef.current = window.setInterval(() => {
+                setCurrentTick((prev) => {
+                    if (prev >= replay.length - 1) {
+                        setPlaying(false);
+                        return prev;
+                    }
+                    return prev + 1;
+                });
+            }, playbackSpeed);
+        }
+        return () => {
+            if (intervalRef.current !== null) {
+                clearInterval(intervalRef.current);
+            }
+        };
+    }, [playing, playbackSpeed, replay]);
+
+    const handleReset = async () => {
+        setPlaying(false);
+        setLoading(true);
+        try {
+            const res = await fetch('/api/simulation/reset', {method: 'POST'});
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            await fetchReplay();
+        } catch (err) {
+            setError(err instanceof Error ? err.message : String(err));
+            setLoading(false);
+        }
+    };
+
+    const handleStepBack = () => {
+        setPlaying(false);
+        setCurrentTick((prev) => Math.max(0, prev - 1));
+    };
+
+    const handleStepForward = () => {
+        if (!replay) return;
+        setPlaying(false);
+        setCurrentTick((prev) => Math.min(replay.length - 1, prev + 1));
+    };
+
+    if (error && !replay) {
         return (
             <div style={{padding: 20, color: '#ff4444', fontFamily: 'monospace'}}>
-                Failed to load grid: {error}
+                Failed to load replay: {error}
                 <br/>
                 Make sure the Kotlin server is running on port 8080.
             </div>
         );
     }
 
-    if (!grid) {
+    if (loading && !replay) {
         return (
             <div style={{padding: 20, color: '#888', fontFamily: 'monospace'}}>
-                Loading grid...
+                Loading simulation...
             </div>
         );
     }
 
+    if (!replay || !replayInfo) return null;
+
+    const frame = replay[currentTick];
+    const organism = frame?.organisms[0];
+
     return (
-        <div style={{width: '100vw', height: '100vh', background: '#111'}}>
-            <HexGridCanvas grid={grid}/>
+        <div style={{width: '100vw', height: '100vh', background: '#111', display: 'flex', flexDirection: 'column'}}>
+            <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 16,
+                padding: '8px 16px',
+                background: '#1a1a1a',
+                borderBottom: '1px solid #333',
+                fontFamily: 'monospace',
+                fontSize: 13,
+                color: '#ccc',
+                flexShrink: 0,
+                flexWrap: 'wrap',
+            }}>
+                <span>Tick: {currentTick}/{replayInfo.totalTicks}</span>
+                <span style={{color: frame?.status === 'RUNNING' ? '#4c4' : '#c44'}}>
+                    {frame?.status}
+                </span>
+                {organism && (
+                    <span>Energy: {organism.energy}</span>
+                )}
+                <div style={{display: 'flex', gap: 4}}>
+                    <button onClick={handleStepBack} style={btnStyle} title="Step back">
+                        {'<'}
+                    </button>
+                    <button
+                        onClick={() => setPlaying(!playing)}
+                        style={{...btnStyle, width: 48}}
+                    >
+                        {playing ? 'II' : '>'}
+                    </button>
+                    <button onClick={handleStepForward} style={btnStyle} title="Step forward">
+                        {'>'}
+                    </button>
+                </div>
+                <input
+                    type="range"
+                    min={0}
+                    max={replay.length - 1}
+                    value={currentTick}
+                    onChange={(e) => {
+                        setPlaying(false);
+                        setCurrentTick(Number(e.target.value));
+                    }}
+                    style={{flex: 1, minWidth: 100}}
+                />
+                <label style={{display: 'flex', alignItems: 'center', gap: 8}}>
+                    Speed:
+                    <input
+                        type="range"
+                        min={50}
+                        max={1000}
+                        step={50}
+                        value={playbackSpeed}
+                        onChange={(e) => setPlaybackSpeed(Number(e.target.value))}
+                        style={{width: 80}}
+                    />
+                    <span style={{width: 45}}>{playbackSpeed}ms</span>
+                </label>
+                <button onClick={handleReset} style={btnStyle}>
+                    Reset
+                </button>
+            </div>
+            <div style={{flex: 1, minHeight: 0}}>
+                {frame && <HexGridCanvas grid={frame.grid} organisms={frame.organisms}/>}
+            </div>
         </div>
     );
 }
+
+const btnStyle: React.CSSProperties = {
+    padding: '4px 12px',
+    background: '#333',
+    color: '#ccc',
+    border: '1px solid #555',
+    borderRadius: 4,
+    cursor: 'pointer',
+    fontFamily: 'monospace',
+    fontSize: 13,
+};

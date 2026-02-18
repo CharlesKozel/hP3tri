@@ -4,13 +4,32 @@ export interface TileState {
   terrainType: number;
   cellType: number;
   organismId: number;
-  energy: number;
 }
 
 export interface GridState {
   width: number;
   height: number;
   tiles: TileState[];
+}
+
+export interface OrganismState {
+  id: number;
+  energy: number;
+  alive: boolean;
+  cellCount: number;
+}
+
+export interface SimulationState {
+  tick: number;
+  status: string;
+  grid: GridState;
+  organisms: OrganismState[];
+}
+
+export interface ReplayInfo {
+  totalTicks: number;
+  width: number;
+  height: number;
 }
 
 export const TerrainType = {
@@ -41,6 +60,7 @@ export const CellType = {
   REPRODUCTIVE: 16,
   SIGNAL_EMITTER: 17,
   PIGMENT: 18,
+  SOFT_TISSUE: 19,
 } as const;
 
 export const TERRAIN_COLORS: Record<number, string> = {
@@ -70,6 +90,7 @@ export const CELL_COLORS: Record<number, string> = {
   [CellType.REPRODUCTIVE]: '#ff88ff',
   [CellType.SIGNAL_EMITTER]: '#ffff88',
   [CellType.PIGMENT]: '#ff44ff',
+  [CellType.SOFT_TISSUE]: '#e8b4a0',
 };
 
 export const CELL_TYPE_NAMES: Record<number, string> = {
@@ -92,6 +113,7 @@ export const CELL_TYPE_NAMES: Record<number, string> = {
   [CellType.REPRODUCTIVE]: 'Reproductive',
   [CellType.SIGNAL_EMITTER]: 'Signal Emitter',
   [CellType.PIGMENT]: 'Pigment',
+  [CellType.SOFT_TISSUE]: 'Soft Tissue',
 };
 
 export const TERRAIN_TYPE_NAMES: Record<number, string> = {
