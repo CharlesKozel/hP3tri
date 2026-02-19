@@ -196,7 +196,7 @@ Cell Attributes:
 - Generation Cost: energy cost to produce.
 - Upkeep Cost: energy cost per tick.
 - Mass: Contributes to movement cost.
-- Consumption Value: energy gained when consumed by another cell.
+- Consumption Value: energy gained when consumed by another cell/organism.
 - Abilities: Unique to each cell type, defines possible interactions with other cells and the environment.
 - Visuals: Color + Icon, ONLY for Web Display.
 
@@ -317,7 +317,7 @@ Fields:
 Each tick executes the following steps **in this exact order** 
 (order matters for determinism, must deterministically resolve conflicts):
 
-### Step 1: Resource Regeneration
+### Step 1: Resource Generation
 - Energy generating cells (photosynthetic, root) compute energy gain and add to organism energy pool.
 - NPC cells (Food) regenerate at a configured rate.
 
@@ -331,46 +331,149 @@ Each tick executes the following steps **in this exact order**
 
 ### Step 3: Brain Evaluation
 - For each organism, pass sensor vector through brain (rule-based or NN).
-- Receive action outputs: movement, growth, reproduction, attack decisions.
+- Receive action outputs: movement, growth, reproduction.
 
-### Step 4: Action Execution
-Process in sub-steps to avoid order-dependent conflicts:
+### Step 4: Movement Execution
+Process in sub-steps. Each sub-step resolves its own conflicts before the next begins.
 
-**4a. Movement**: Organisms with flagella/locomotion cells attempt to move. Two movement modes:
-- *Flagella shift*: if organism has sufficient flagella relative to mass, shift ALL cells one hex in the movement direction (atomic operation). Costs energy proportional to mass. Terrain modifies cost (e.g., water reduces cost for aquatic-capable organisms).
-- *Amoeboid*: grow cells at leading edge, retract cells at trailing edge. Slower, lower energy cost, doesn't require flagella cells.
-- **Terrain constraints**: organisms cannot move into or through rock tiles. Movement into water tiles only succeeds if the organism has water-compatible cell types. Terrain type of destination tile is checked before movement resolves.
+IMPORTANT: Organisms 'speed' is manifest by the delay between their last movement and next movement. Larger delay = slower.
+This way fast organisms move multiple times before slower things. However overall movement per tick is just 1 cell in a given direction.
 
-**4b. Growth**: Border cells of growing organisms attempt to fill adjacent empty hexes. Cell type determined by body plan provider (CPPN query or template lookup). Costs energy per new cell. Growth rate limited by energy availability and configured maximum. **Terrain constraints**: growth into a tile is blocked if the terrain type forbids that cell type (e.g., armor cannot grow on water tiles, roots cannot grow on rock). Growth into rock tiles is always blocked.
+#### **4a. Movement Point Accumulation**
+locomotion_power = sum(cell.locomotion_power for each cell in organism)
+total_cell_mass = sum(cell.mass for each cell in organism)
 
-**4c. Reproduction**: Organisms that choose to reproduce and have sufficient energy spawn a **seed cell** in an adjacent empty hex. The seed carries a copy of the parent's genome (no mutation during match — clones only). Parent's energy is reduced by the reproduction cost; offspring receives a configured starting energy amount.
+Each organism stores `movement_points` (integer, initialized to 0 at birth).
 
-**4d. Attack activation**: Mouth cells adjacent to foreign cells attempt to consume them. Spike cells passively damage adjacent foreign cells.
+Each tick, for every organism with locomotion_power > 0:
+    movement_points += locomotion_power
+    movement_points = min(movement_points, total_cell_mass)
 
-### Step 5: Combat Resolution
-- For each mouth-vs-foreign-cell interaction: calculate damage based on mouth strength, teeth bonuses, target armor. If damage exceeds cell durability, the target cell is **destroyed** (removed from grid). Energy from the destroyed cell transfers to the attacker's pool.
-- For each spike-vs-foreign-cell interaction: similar but passive (no energy transfer, just damage).
-- Destroyed cells leave empty hexes. The owning organism loses those cells but remaining cells persist.
-- **Disconnection check**: if cell destruction severs an organism into disconnected components, the smaller component(s) die (cells removed, energy lost). This keeps organism integrity without complex multi-entity splitting logic.
+The cap (`min`) is critical: it prevents organisms from banking movement points while stationary.
+An organism that stands still for 100 ticks gains no speed advantage over one that stood still for 1 tick.
+Once capped, excess accumulation is simply discarded.
 
-### Step 6: Energy Accounting
-- Each cell costs maintenance energy (type-dependent). Terrain may modify maintenance costs (e.g., toxic terrain adds damage per tick to cells on it).
-- Photosynthetic cells generate energy. Terrain modifies yield (fertile soil multiplier, water reduction).
-- Root cells on fertile soil generate bonus energy.
-- Net energy change applied to each organism's pool.
-- Organisms at zero energy begin starvation: remove outermost cells until energy stabilizes or organism dies.
+An organism is **movement-ready** when `movement_points >= total_cell_mass`.
+
+This is Bresenham-style integer accumulation: an organism with locomotion_power=3 and total_cell_mass=10
+moves exactly 3 times per 10 ticks, evenly distributed. Doubling locomotion_power exactly doubles
+movement frequency. No floating-point arithmetic needed.
+
+Organisms with zero locomotion_power are **immobile** — they never accumulate movement points.
+
+#### **4b. Movement Eligibility Check**
+An organism is eligible to move this tick if ALL of the following are true:
+1. It is **movement-ready** (`movement_points >= total_cell_mass`).
+2. It has sufficient energy: `needed_energy = ceil(total_cell_mass / MOVEMENT_ENERGY_CONSTANT)`
+   and `needed_energy <= organism.energy`.
+3. Its brain requested movement this tick.
+
+
+#### **4c. Body Shift (Primary Movement)**
+
+Organisms who are eligible to move, and whose brain tick computation output a movement request
+will attempt to shift all cells exactly 1 hex in the brain's chosen hex-direction simultaneously.
+Conflict resolution is resolved by priority calculation (see below), movement failed due to conflict
+results in no change to the organism's position.
+
+Execution:
+1. For each cell in the organism, compute the destination hex (current position + direction offset, with toroidal wrapping).
+2. Validate ALL destination hexes:
+   - Destination terrain is eligible for cell placement.
+   - Destination is not occupied by another organism's cell.
+   - Destinations that overlap with the organism's own current cells are always valid (organism passing through its own footprint).
+3. Compute Organism's Movement Priority Rank (summing these values):
+   - (+) speed_score * TOP_PRIORITY_SCALE (highest priority: speed)
+     where speed_score = locomotion_power / total_cell_mass (integer division)
+   - (+) (MAX_ORGANISM_CELLS - organism_cell_count) * MID_PRIORITY_SCALE (medium priority: fewer cells move first)
+   - (+) organism_id (low priority: higher id (younger) organisms move first)
+   - IMPORTANT: choose scale factors so that lower-priority tiers cannot supersede higher ones,
+     regardless of organism count or cell count.
+4. Generate claims for each destination hex:
+   - For each moving organism, create the set of its desired destination hexes.
+   - Each moving organism writes its organism_id + priority_rank to each of its destination hexes 
+     (via `ti.atomic_max` or equivalent). Priority is a single integer encoding tiebreakers.
+   - If a destination cell is already claimed by a higher priority organism, the claim fails.
+   - Identify organisms that have had all of their claims succeed.
+   - Consider optimizations here, Taichi might have a better way to implement this same conceptual logic.
+5. Move all organisms whose claims succeeded + Deduct Costs
+   - Update the grid state with the new cell-type and organism_id for each successful claim.
+   - Deduct needed_energy from the organism energy.
+   - Deduct movement_points: `movement_points -= total_cell_mass`
+   - Organisms whose claims FAILED retain their movement_points (they were physically blocked, not slow).
+
+### Step 5: Growth
+Border cells of growing organisms attempt to fill adjacent empty hexes. **Growth is always additive at the border**. 
+No interior expansion; no pushing existing cells outward. (consider changing later)
+
+Like movement, growth may also have conflicts with other organisms. Conflicts are resolved in a similar manor, computing
+claims and breaking ties, however quickness is not considered for growth conflicts.
+
+Execution:
+1. The body plan provider (CPPN or lookup table) is queried for each empty hex adjacent to the organism's border cells,
+   and the organisms existing cells: "should a cell exist here, and what type?"
+2. Validate Energy Costs:
+    - For each new cell to grow, the organism must have sufficient energy to pay for the cost.
+    - If not all cells can be grown, grow the most possible in a deterministic order.
+    - Discard any growth requests that cannot be paid for before moving on to validation and conflict resolution.
+3. Validate ALL destination hexes:
+    - Destination terrain is eligible for cell placement.
+    - Destination is not occupied by another cell.
+    - Destinations that are occupied by the current organism's cells are valid, but will destroy the existing cell.
+4. Compute Organism's Growth Priority Rank (summing these values):
+    - (+) (MAX_ORGANISM_CELLS - organism_cell_count) * 1,000 (medium priority: fewer cells move first)
+    - (+) organism_id (low priority: higher id (younger) organisms move first)
+    - IMPORTANT: follow similar logic/constraints as in movement.
+5. Generate claims for each destination hex:
+   - Follow similar logic as in movement.
+6. Generate new cells + Deduct Costs.
+   - Update the grid state with the new cell-type and organism_id for each successful claim.
+   - Deduct growth cost from the organism energy. 
+   - Growth cost is cell-type-dependent (configured per cell type, e.g., pseudopod=2, skin=5, armor=15).
+
+**NOTE: Amoeboid Flow (via Growth + Retraction)**
+
+Amoeboid movement is NOT a separate movement mode. It emerges from combining two standard actions: 
+**directed growth** at the leading edge + **voluntary retraction** at the trailing edge.
+
+Organisms my also choose to absorb / delete their own cells. Some cell types are designed to be deleted, providing
+a refunded energy cost to the organism when absorbed.
+
+- The brain requests growth in a specific direction and retraction from the opposite side.
+- **Retraction = cell death**: the retracted cell is destroyed, its hex becomes empty.
+- **Regrowth at the leading edge** costs the full growth price of the new cell type.
+- This means amoeboid flow is only economically viable for **cheap cell types**:
+  - Pseudopod: grow cost ~2, retract+regrow ~3-4 total → affordable, designed for this
+  - Soft tissue: grow cost ~3, retract+regrow ~5-6 → marginal
+  - Armor: grow cost ~15, retract+regrow ~28-30 → economically unviable
+- Organisms can use BOTH flagella shift AND amoeboid flow: shift the rigid body, then extend pseudopod tendrils at the leading edge. These are independent actions in the same tick.
+
+IMPORTANT: this kind of movement / growth should be considered when designing brain growth interfaces.
+
+#### **Reproduction** Special Kind of New Cell Growth
+- Organisms that choose to reproduce and have sufficient energy spawn a seed cell of any cell type in an adjacent empty hex.
+- IMPORTANT: this should happen simultaneously with growth, brains should decide on reproduction at the same time as growth.
+- The seed carries a copy of the parent's genome (no mutation during match — clones only).
+- Parent's energy is reduced by the reproduction cost + new cell cost + chosen starting energy of seed.
+The seed is a new organism (new ID, same genome) that begins its own developmental growth on subsequent ticks.
+
+### Step 6: Action Resolution
+- After all movement and growth are complete, any cell types which have possible actions are executed.
+- Each cell type has a list of possible actions, each with a different set of conditions.
+- For simplicity, actions are always performed if possible not decided by the brain.
+- Consider combining this step with Step 1: Resource Generation.
+- Example Actions:
+  - Mouth: consume valid hex next to it IF its NOT the same genome and alive, destroying it and transferring energy to the organism's pool.
+  - Spikes: destroy valid adjacent hexes of organisms with different genomes, or dead cells.
 
 ### Step 7: Death and Cleanup
-- Organisms with zero cells are removed.
-- Dead cell positions become food tiles (energy recycling).
-
-### Step 8: Score Update
-- Count cells per genome (not per organism — clones of the same genome contribute to the same score).
-- Record for fitness evaluation.
+- Organisms with zero cells are marked as dead and removed from live organism list.
+- Organisms with zero energy are marked as dead, their cells remain on the grid, but are detectable as dead cells.
 
 ### Determinism Guarantee
 - All random decisions use a seeded PRNG.
-- Conflict resolution (two organisms trying to grow into the same empty hex) resolved by deterministic tiebreaking (e.g., lower organism ID wins).
+- Movement conflicts resolved by deterministic priority: fastest organism wins, ties broken by lighter mass, then by youngest organism.
+- Growth conflicts use the same priority system, except speed is not considered.
 - No floating-point non-determinism: use fixed-point arithmetic or careful GPU reduction ordering where needed.
 
 ---
@@ -393,7 +496,7 @@ Process in sub-steps to avoid order-dependent conflicts:
 7. **Unbounded growth** is possible for plant-like organisms whose body plan never says stop — they expand indefinitely as long as energy allows. Natural limits: available space, maintenance costs exceeding photosynthesis income, predation.
 
 ### Damage and Regeneration
-1. When cells are destroyed (combat, starvation), the organism loses those cells.
+1. When cells are destroyed, the organism loses those cells.
 2. Remaining border cells at the wound site detect empty adjacent hexes.
 3. These border cells query the body plan provider: "should a cell exist here?"
 4. If yes, and the organism has energy, the cell regrows.
@@ -403,10 +506,11 @@ Process in sub-steps to avoid order-dependent conflicts:
 ### Death
 An organism dies when:
 - All cells are destroyed.
-- Energy reaches zero and all cells are consumed by starvation.
-- A disconnection event leaves no viable connected component.
-
-Dead organisms' cells become food tiles on the grid.
+- Energy reaches zero.
+- 
+#### Partial Death
+- When an organisms cells are destroyed leaving it in two or more disconnected clusters of hexes, the largest
+  of the divided components remains alive, while the others are removed from the organism and marked as dead.
 
 ---
 
