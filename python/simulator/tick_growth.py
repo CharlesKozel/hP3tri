@@ -7,7 +7,7 @@ import taichi as ti
 
 from simulator.hex_grid import TerrainType, NEIGHBOR_OFFSETS, neighbors, wrap
 from simulator.cell_types import CELL_PROPERTIES, CellType
-from simulator.types import OrganismId
+from simulator.sim_types import OrganismId
 from interfaces.brain import OrganismView
 
 if TYPE_CHECKING:

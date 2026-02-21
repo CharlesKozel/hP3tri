@@ -5,7 +5,7 @@ from typing import Callable, TypeAlias
 import taichi as ti
 
 from simulator.hex_grid import neighbors, index
-from simulator.types import OrganismId, GridIndex, GenomeId, HexGridState
+from simulator.sim_types import OrganismId, GridIndex, GenomeId, HexGridState
 
 
 # 6 minimal cell types for initial development, IMPORTANT: DONT ADD MORE
@@ -113,6 +113,8 @@ class CellTypeFields:
 
     def load(self) -> None:
         for ct, props in CELL_PROPERTIES.items():
+            print(ct)
+            print(props)
             self.maintenance_cost[ct] = props.maintenance_cost
             self.growth_cost[ct] = props.growth_cost
             self.mass[ct] = props.mass

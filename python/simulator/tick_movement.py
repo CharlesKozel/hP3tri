@@ -1,6 +1,6 @@
 import taichi as ti
 from simulator.hex_grid import neighbor_offset
-from simulator.types import ALIVE, DEAD
+from simulator.sim_types import ALIVE, DEAD
 
 
 # ------------------------------------------------------------------------

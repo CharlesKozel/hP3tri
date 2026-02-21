@@ -24,7 +24,7 @@ data class ReplayInfo(
 private val defaultConfig: Map<String, Any> = mapOf(
     "width" to 32,
     "height" to 32,
-    "tick_limit" to 18,
+    "tick_limit" to 100,
     "seed" to 42,
 )
 

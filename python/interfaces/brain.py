@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 import taichi as ti
 
-from simulator.types import GenomeId
+from simulator.sim_types import GenomeId
 
 if TYPE_CHECKING:
     from simulator.engine import Organism

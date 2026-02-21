@@ -3,7 +3,7 @@ import numpy as np
 from numpy.typing import NDArray
 from simulator.hex_grid import TerrainType, NEIGHBOR_OFFSETS, neighbor_offset
 from simulator.cell_types import CellTypeFields, CellType
-from simulator.types import OrganismId, GenomeId, GenomeData, DEAD
+from simulator.sim_types import OrganismId, GenomeId, GenomeData, DEAD
 from interfaces.brain import BrainProvider, OrganismView, SensorInputs, BrainOutput
 from interfaces.body_plan import BodyPlanProvider
 from interfaces.sensor import SensorAggregator
@@ -253,8 +253,14 @@ class SimulationEngine:
             # sensors = sensor_map.get(org_id, SensorInputs())
             # outputs = brain_tick(self.organisms[org_id])
 
+            age = self.organisms[org_id].age
+            loop = int((-1 + (1 + 4 * age / 3) ** 0.5) / 2) + 1
+            loop_start = 3 * (loop - 1) * loop
+            pos_in_loop = age - loop_start
+            direction = (pos_in_loop // loop + org_id % 6) % 6
+
             outputs = BrainOutput(
-                move_direction = self.organisms[org_id].age % 6
+                move_direction=direction,
             )
 
             self.organisms[org_id].brain_move_dir = outputs.move_direction

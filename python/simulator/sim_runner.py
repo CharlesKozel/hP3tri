@@ -19,6 +19,24 @@ def run_simulation(config: dict) -> list[dict]:
         seed_cell_type=int(CellType.FLAGELLA),
         starting_energy=10_000,
     )
+    engine.create_organism(
+        seed_q=2,
+        seed_r=2,
+        seed_cell_type=int(CellType.SOFT_TISSUE),
+        starting_energy=10_000,
+    )
+    engine.create_organism(
+        seed_q=6,
+        seed_r=6,
+        seed_cell_type=int(CellType.MOUTH),
+        starting_energy=10_000,
+    )
+    engine.create_organism(
+        seed_q=18,
+        seed_r=18,
+        seed_cell_type=int(CellType.EYE),
+        starting_energy=10_000,
+    )
 
     replay: list[dict] = []
     engine.recompute_aggregates()
@@ -29,3 +47,6 @@ def run_simulation(config: dict) -> list[dict]:
         replay.append(engine.snapshot())
 
     return replay
+
+if __name__ == '__main__':
+    run_simulation({})
