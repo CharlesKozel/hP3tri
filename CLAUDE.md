@@ -25,7 +25,7 @@ This project is a **2D artificial life evolution simulator** where genetically d
 - **Kotlin (JVM)**: Primary language. Owns the orchestrator layer — evolution, tournament management, genome management, configuration, match coordination, serialization, CLI/entry point.
 - **Python**: Simulation computation layer. Owns the GPU-acceleratable simulation kernel with Taichi, CPPN evaluation, and any ML workloads. Called from Kotlin via Jep (Java Embedded Python). 
   - Always use the project's Python venv for Python commands: prefix with `.venv/bin/` (e.g., `.venv/bin/python`, `.venv/bin/pytest`).
-
+  - When python dictionary / set types are ambiguous, like dict[int,int] use TypeAlias
 ### Coding Standards:
 - Always use 4 spaces for indentation.
 

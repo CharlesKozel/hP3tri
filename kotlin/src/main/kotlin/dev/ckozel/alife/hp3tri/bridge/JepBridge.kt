@@ -7,7 +7,7 @@ class JepBridge(pythonSourceDir: String) {
     private val interpreter: SharedInterpreter = SharedInterpreter().apply {
         exec("import sys")
         exec("sys.path.insert(0, '$pythonSourceDir')")
-        exec("from simulator.engine import run_simulation")
+        exec("from simulator.sim_runner import run_simulation")
     }
 
     fun runSimulation(config: Map<String, Any>): List<SimulationState> {

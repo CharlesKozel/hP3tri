@@ -61,6 +61,7 @@ export const CellType = {
   SIGNAL_EMITTER: 17,
   PIGMENT: 18,
   SOFT_TISSUE: 19,
+  FOOD: 20,
 } as const;
 
 export const TERRAIN_COLORS: Record<number, string> = {
@@ -91,6 +92,7 @@ export const CELL_COLORS: Record<number, string> = {
   [CellType.SIGNAL_EMITTER]: '#ffff88',
   [CellType.PIGMENT]: '#ff44ff',
   [CellType.SOFT_TISSUE]: '#e8b4a0',
+  [CellType.FOOD]: '#66dd66',
 };
 
 export const CELL_TYPE_NAMES: Record<number, string> = {
@@ -114,6 +116,7 @@ export const CELL_TYPE_NAMES: Record<number, string> = {
   [CellType.SIGNAL_EMITTER]: 'Signal Emitter',
   [CellType.PIGMENT]: 'Pigment',
   [CellType.SOFT_TISSUE]: 'Soft Tissue',
+  [CellType.FOOD]: 'Food',
 };
 
 export const TERRAIN_TYPE_NAMES: Record<number, string> = {
