@@ -4,13 +4,22 @@ from numpy.typing import NDArray
 from simulator.hex_grid import TerrainType, NEIGHBOR_OFFSETS, neighbor_offset
 from simulator.cell_types import CellTypeFields, CellType
 from simulator.types import OrganismId, GenomeId, GenomeData, DEAD
-from interfaces.brain import BrainProvider, OrganismView, SensorInputs, brain_tick, BrainOutput
+from interfaces.brain import BrainProvider, OrganismView, SensorInputs, BrainOutput
 from interfaces.body_plan import BodyPlanProvider
 from interfaces.sensor import SensorAggregator
 from stubs.stub_brain import StubBrain
 from stubs.stub_body_plan import StubBodyPlan
 from stubs.stub_sensor import StubSensor
-from simulator.tick_movement import execute_movement
+from simulator.tick_movement import (
+    compute_movers_and_priorities,
+    write_claims,
+    invalidate_conflicting_claims,
+    copy_grid_to_temp,
+    clear_mover_source_cells,
+    write_mover_destination_cells,
+    commit_temp_grid,
+    deduct_movement_costs,
+)
 
 ti.init(arch=ti.cpu, default_ip=ti.i32, default_fp=ti.f32)
 
@@ -28,7 +37,7 @@ class GridCell:
     organism_id: ti.i32
     terrain_type: ti.i8
 
-# TODO check sizes of these, most are larger than necessary
+# TODO check sizes of these, most are larger than necessary, or signed when unsigned would work
 @ti.dataclass
 class Organism:
     genome_id: ti.i32
@@ -59,7 +68,7 @@ class SimulationEngine:
         self.tick_count = 0
         self.grid_specs = GridSpecs(width, height, self.grid_size)
 
-        self.next_org_id: ti.u16 = 0
+        self.next_org_id: ti.u16 = 1 # start at 1, 0 = no organism
         self.organism_genome_map: dict[OrganismId, GenomeId] = {}
         self.organism_brain_map: dict[OrganismId, BrainProvider] = {}
         self.organism_body_plan_map: dict[OrganismId, BodyPlanProvider] = {}
@@ -75,6 +84,7 @@ class SimulationEngine:
         self.grid = GridCell.field(shape=self.grid_size)
         self.temp_grid = GridCell.field(shape=self.grid_size)
         self.organisms = Organism.field(shape=MAX_ORGANISMS)
+        self.claims = ti.field(dtype=ti.u64, shape=self.grid_size)
 
         # Scratch fields
         self.org_move_direction = ti.field(dtype=ti.i32, shape=MAX_ORGANISMS)
@@ -96,11 +106,23 @@ class SimulationEngine:
         self.tick_count += 1
 
         self.recompute_aggregates()
-        self.compute_zero_cell_death()
+        # self.compute_zero_cell_death()
         # self.step_resources() # TODO implement photosynthesis etc.
         # sensor_map = self.step_sensors() # removing for minimal sim test
         self.step_brains() # TODO read sensors for brains
-        self.step_movement()
+
+        self.claims.fill(0)
+        self.step_movement(
+            self.grid,
+            self.temp_grid,
+            self.organisms,
+            self.next_org_id,
+            self.width,
+            self.height,
+            self.grid_size,
+            self.claims,
+        )
+
         # self.step_growth() # removing for minimal sim test
         # self._organisms_took_damage.clear()
         # self.step_actions() # removing for minimal sim test
@@ -117,7 +139,9 @@ class SimulationEngine:
         brain: BrainProvider | None = None,
         body_plan: BodyPlanProvider | None = None,
     ) -> OrganismId:
-        org_id = ti.atomic_add(self.next_org_id)
+        # org_id = ti.atomic_add(self.next_org_id, 1)
+        org_id = self.next_org_id
+        self.next_org_id += 1
 
         self.organisms[org_id].alive = 1
         self.organisms[org_id].genome_id = genome_id
@@ -155,7 +179,7 @@ class SimulationEngine:
         self.organisms.total_mass.fill(0)
         self.organisms.locomotion_power.fill(0)
         self.organisms.upkeep_cost.fill(0)
-        self.organisms.photosynthesis.fill(0)
+
         self._kernel_recompute_aggregates(
             self.grid,
             self.ct_fields.mass,
@@ -186,7 +210,6 @@ class SimulationEngine:
                 ti.atomic_add(org[arr_idx].total_mass, ct_mass[ct])
                 ti.atomic_add(org[arr_idx].locomotion_power, ct_locomotion[ct])
                 ti.atomic_add(org[arr_idx].upkeep_cost, ct_maintenance[ct])
-                ti.atomic_add(org[arr_idx].photosynthesis, ct_energy_gen[ct])
 
     # @ti.kernel
     # def _kernel_apply_resources(
@@ -239,16 +262,34 @@ class SimulationEngine:
 
     # ── Step 4: Movement kernels ──────────────────────────────────
 
-
     @ti.kernel
-    def step_movement(self) -> None:
-        execute_movement(
-            grid=self.grid,
-            temp_grid=self.temp_grid,
-            organisms=self.organisms,
-            next_org_id=self.next_org_id,
-            grid_specs=self.grid_specs,
-        )
+    def step_movement(
+            self,
+            grid: ti.template(),
+            temp_grid: ti.template(),
+            organisms: ti.template(),
+            next_org_id: ti.i32,
+            width: ti.i32,
+            height: ti.i32,
+            grid_size: ti.i32,
+            claims: ti.template(),
+    ):
+        for oid in range(next_org_id):
+            compute_movers_and_priorities(oid, organisms)
+        for idx in range(grid_size):
+            write_claims(idx, organisms, grid, width, height, grid_size, claims)
+        for idx in range(grid_size):
+            invalidate_conflicting_claims(idx, organisms, grid, width, height, grid_size, claims)
+        for idx in range(grid_size):
+            copy_grid_to_temp(idx, grid, temp_grid)
+        for idx in range(grid_size):
+            clear_mover_source_cells(idx, grid, organisms, temp_grid)
+        for idx in range(grid_size):
+            write_mover_destination_cells(idx, grid, organisms, width, height, grid_size, temp_grid)
+        for idx in range(grid_size):
+            commit_temp_grid(idx, grid, temp_grid)
+        for oid in range(next_org_id):
+            deduct_movement_costs(oid, organisms)
 
     # ── Step 5: Growth ──────────────────────────────────────────
 
@@ -368,7 +409,7 @@ class SimulationEngine:
 
     # ── Snapshot ────────────────────────────────────────────────
 
-    def snapshot(self, tick: int) -> dict:
+    def snapshot(self) -> dict:
         ct: NDArray[np.int8] = self.grid.cell_type.to_numpy()
         oi: NDArray[np.int32] = self.grid.organism_id.to_numpy()
         tt: NDArray[np.int8] = self.grid.terrain_type.to_numpy()
@@ -377,7 +418,7 @@ class SimulationEngine:
         for idx in range(self.grid_size):
             cell = int(ct[idx])
             terrain = int(tt[idx])
-            if cell != CellType.EMPTY or terrain != TerrainType.GROUND:
+            if cell != CellType.NULL:
                 q = idx % self.width
                 r = idx // self.width
                 tiles.append({
@@ -402,7 +443,7 @@ class SimulationEngine:
         )
 
         return {
-            "tick": tick,
+            "tick": self.tick_count,
             "status": "RUNNING" if any_alive else "FINISHED",
             "grid": {
                 "width": self.width,

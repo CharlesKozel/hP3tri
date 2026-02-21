@@ -19,17 +19,18 @@ NEIGHBOR_OFFSETS: list[tuple[int, int]] = [
     (0, +1),
 ]
 
+OFFSETS_MATRIX = ti.Matrix([
+    [+1, 0],
+    [+1, -1],
+    [0, -1],
+    [-1, 0],
+    [-1, +1],
+    [0, +1],
+])
+
 @ti.func
 def neighbor_offset(direction: ti.i32) -> ti.math.ivec2:
-    offsets = ti.static([
-        ti.math.ivec2(+1, 0),
-        ti.math.ivec2(+1, -1),
-        ti.math.ivec2(0, -1),
-        ti.math.ivec2(-1, 0),
-        ti.math.ivec2(-1, +1),
-        ti.math.ivec2(0, +1),
-    ])
-    return offsets[direction]
+    return ti.Vector([OFFSETS_MATRIX[direction, 0], OFFSETS_MATRIX[direction, 1]])
 
 
 def wrap(q: int, r: int, width: int, height: int) -> tuple[int, int]:

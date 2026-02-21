@@ -1,10 +1,15 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
 import taichi as ti
 
-
-from simulator.engine import Organism
 from simulator.types import GenomeId
+
+if TYPE_CHECKING:
+    from simulator.engine import Organism
 
 
 @dataclass
@@ -45,10 +50,10 @@ class BrainProvider(ABC):
     ) -> BrainOutput:
         ...
 
-@ti.func
-def brain_tick(organism: Organism) -> BrainOutput:
-    # dummy brain implementation
-    # in actuality this needs to run the right brain for the genome
-    return BrainOutput(
-        move_direction = organism.age % 6
-    )
+# @ti.func
+# def brain_tick(organism: Organism) -> BrainOutput:
+#     # dummy brain implementation
+#     # in actuality this needs to run the right brain for the genome
+#     return BrainOutput(
+#         move_direction = organism.age % 6
+#     )

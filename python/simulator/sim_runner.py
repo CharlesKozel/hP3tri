@@ -14,17 +14,18 @@ def run_simulation(config: dict) -> list[dict]:
     center_r = height // 2
 
     engine.create_organism(
-        seed_q=center_q, seed_r=center_r,
+        seed_q=0,
+        seed_r=0,
         seed_cell_type=int(CellType.FLAGELLA),
-        starting_energy=100,
+        starting_energy=10_000,
     )
 
     replay: list[dict] = []
     engine.recompute_aggregates()
-    replay.append(engine.snapshot(0))
+    replay.append(engine.snapshot())
 
-    for tick in range(1, tick_limit + 1):
+    for tick in range(tick_limit):
         engine.step()
-        replay.append(engine.snapshot(tick))
+        replay.append(engine.snapshot())
 
     return replay
