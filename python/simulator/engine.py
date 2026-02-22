@@ -205,11 +205,10 @@ class SimulationEngine:
             oid = grid[idx].organism_id
             if oid > 0:
                 ct = ti.cast(grid[idx].cell_type, ti.i32)
-                arr_idx = oid - 1
-                ti.atomic_add(org[arr_idx].cell_count, 1)
-                ti.atomic_add(org[arr_idx].total_mass, ct_mass[ct])
-                ti.atomic_add(org[arr_idx].locomotion_power, ct_locomotion[ct])
-                ti.atomic_add(org[arr_idx].upkeep_cost, ct_maintenance[ct])
+                ti.atomic_add(org[oid].cell_count, 1)
+                ti.atomic_add(org[oid].total_mass, ct_mass[ct])
+                ti.atomic_add(org[oid].locomotion_power, ct_locomotion[ct])
+                ti.atomic_add(org[oid].upkeep_cost, ct_maintenance[ct])
 
     # @ti.kernel
     # def _kernel_apply_resources(
@@ -436,16 +435,16 @@ class SimulationEngine:
                 })
 
         organisms: list[dict] = []
-        for i in range(self.next_org_id):
+        for oid in range(1, self.next_org_id):
             organisms.append({
-                "id": i + 1,
-                "energy": int(self.organisms[i].energy),
-                "alive": bool(self.organisms[i].alive),
-                "cellCount": int(self.organisms[i].cell_count),
+                "id": oid,
+                "energy": int(self.organisms[oid].energy),
+                "alive": bool(self.organisms[oid].alive),
+                "cellCount": int(self.organisms[oid].cell_count),
             })
 
         any_alive = any(
-            self.organisms[i].alive for i in range(self.next_org_id)
+            self.organisms[oid].alive for oid in range(1, self.next_org_id)
         )
 
         return {
