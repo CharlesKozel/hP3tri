@@ -1,10 +1,11 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import HexGridCanvas from './components/HexGridCanvas';
-import type {ReplayInfo, SimulationState} from './types';
+import type {CellTypeInfo, ReplayInfo, SimulationState} from './types';
 
 export default function App() {
     const [replay, setReplay] = useState<SimulationState[] | null>(null);
     const [replayInfo, setReplayInfo] = useState<ReplayInfo | null>(null);
+    const [cellTypes, setCellTypes] = useState<CellTypeInfo[]>([]);
     const [currentTick, setCurrentTick] = useState(0);
     const [playing, setPlaying] = useState(false);
     const [playbackSpeed, setPlaybackSpeed] = useState(200);
@@ -16,15 +17,24 @@ export default function App() {
         setLoading(true);
         setError(null);
         try {
-            const infoRes = await fetch('/api/replay/info');
+            const [infoRes, replayRes, cellTypesRes] = await Promise.all([
+                fetch('/api/replay/info'),
+                fetch('/api/replay'),
+                fetch('/api/cell-types'),
+            ]);
             if (!infoRes.ok) throw new Error(`HTTP ${infoRes.status}`);
+            if (!replayRes.ok) throw new Error(`HTTP ${replayRes.status}`);
+            if (!cellTypesRes.ok) throw new Error(`HTTP ${cellTypesRes.status}`);
+
             const info: ReplayInfo = await infoRes.json();
             setReplayInfo(info);
 
-            const replayRes = await fetch('/api/replay');
-            if (!replayRes.ok) throw new Error(`HTTP ${replayRes.status}`);
             const frames: SimulationState[] = await replayRes.json();
             setReplay(frames);
+
+            const types: CellTypeInfo[] = await cellTypesRes.json();
+            setCellTypes(types);
+
             setCurrentTick(0);
             setPlaying(true);
         } catch (err) {
@@ -173,7 +183,7 @@ export default function App() {
                 </button>
             </div>
             <div style={{flex: 1, minHeight: 0}}>
-                {frame && <HexGridCanvas grid={frame.grid} organisms={frame.organisms}/>}
+                {frame && <HexGridCanvas grid={frame.grid} organisms={frame.organisms} cellTypes={cellTypes}/>}
             </div>
         </div>
     );

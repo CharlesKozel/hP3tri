@@ -33,3 +33,10 @@ data class SimulationState(
     val grid: GridState,
     val organisms: List<OrganismState>,
 )
+
+@Serializable
+data class CellTypeInfo(
+    val id: Int,
+    val name: String,
+    val color: String,
+)

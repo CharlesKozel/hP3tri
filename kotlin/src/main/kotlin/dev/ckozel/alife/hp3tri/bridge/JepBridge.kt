@@ -8,6 +8,7 @@ class JepBridge(pythonSourceDir: String) {
         exec("import sys")
         exec("sys.path.insert(0, '$pythonSourceDir')")
         exec("from simulator.sim_runner import run_simulation")
+        exec("from simulator.cell_types import get_cell_type_metadata")
     }
 
     fun runSimulation(config: Map<String, Any>): List<SimulationState> {
@@ -53,6 +54,19 @@ class JepBridge(pythonSourceDir: String) {
             grid = grid,
             organisms = organisms,
         )
+    }
+
+    fun getCellTypes(): List<CellTypeInfo> {
+        interpreter.exec("_cell_types = get_cell_type_metadata()")
+        @Suppress("UNCHECKED_CAST")
+        val result = interpreter.getValue("_cell_types") as List<Map<String, Any>>
+        return result.map { m ->
+            CellTypeInfo(
+                id = (m["id"] as Number).toInt(),
+                name = m["name"] as String,
+                color = m["color"] as String,
+            )
+        }
     }
 
     fun close() {

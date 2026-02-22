@@ -29,6 +29,7 @@ private val defaultConfig: Map<String, Any> = mapOf(
 )
 
 fun startServer(bridge: JepBridge, port: Int = 8080) {
+    val cellTypes = bridge.getCellTypes()
     var simulation = Simulation(bridge, defaultConfig)
 
     embeddedServer(Netty, port = port) {
@@ -47,6 +48,9 @@ fun startServer(bridge: JepBridge, port: Int = 8080) {
         }
 
         routing {
+            get("/api/cell-types") {
+                call.respond(cellTypes)
+            }
             get("/api/replay/info") {
                 val sim = simulation
                 call.respond(ReplayInfo(sim.totalTicks, sim.width, sim.height))

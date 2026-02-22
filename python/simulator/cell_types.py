@@ -44,32 +44,29 @@ class CellProps:
     locomotion_power: int
     energy_generation: int
     consumption_value: int
+    color: str
+    display_name: str
 
 
 CELL_PROPERTIES: dict[CellType, CellProps] = {
-    CellType.NULL:             CellProps(0, 0,  0, 0,  0, 0),
-    CellType.SOFT_TISSUE:      CellProps(1, 3,  1, 1,  0, 0),
-    CellType.MOUTH:            CellProps(2, 10, 3, 0,  0, 0),
-    CellType.FLAGELLA:         CellProps(2, 10, 1, 10, 0, 0),
-    CellType.EYE:              CellProps(3, 8,  2, 0,  0, 0),
-    CellType.FOOD:             CellProps(0, 10, 5, 0,  0, 10),
-
-    # CellType.SKIN:             CellProps(maintenance_cost=1, growth_cost=5,  mass=2, consumption_value=3),
-    # CellType.ARMOR:            CellProps(maintenance_cost=3, growth_cost=15, mass=5, consumption_value=5),
-    # CellType.SPIKE:            CellProps(maintenance_cost=2, growth_cost=10, mass=3, consumption_value=4),
-    # CellType.PHOTOSYNTHETIC:   CellProps(maintenance_cost=1, growth_cost=8,  mass=2, energy_generation=2, consumption_value=4),
-    # CellType.MEMBRANE:         CellProps(maintenance_cost=1, growth_cost=4,  mass=1, consumption_value=2),
-    # CellType.ROOT:             CellProps(maintenance_cost=1, growth_cost=6,  mass=2, energy_generation=1, consumption_value=3),
-    # CellType.TEETH:            CellProps(maintenance_cost=2, growth_cost=12, mass=3, consumption_value=4),
-    # CellType.CHEMICAL_SENSOR:  CellProps(maintenance_cost=1, growth_cost=6,  mass=1, consumption_value=2),
-    # CellType.TOUCH_SENSOR:     CellProps(maintenance_cost=1, growth_cost=5,  mass=1, consumption_value=2),
-    # CellType.CILIA:            CellProps(maintenance_cost=1, growth_cost=6,  mass=1, locomotion_power=1, consumption_value=2),
-    # CellType.PSEUDOPOD:        CellProps(maintenance_cost=1, growth_cost=2,  mass=1, consumption_value=1),
-    # CellType.STORAGE_VACUOLE:  CellProps(maintenance_cost=1, growth_cost=8,  mass=2, consumption_value=5),
-    # CellType.REPRODUCTIVE:     CellProps(maintenance_cost=2, growth_cost=12, mass=2, consumption_value=4),
-    # CellType.SIGNAL_EMITTER:   CellProps(maintenance_cost=1, growth_cost=6,  mass=1, consumption_value=2),
-    # CellType.PIGMENT:          CellProps(maintenance_cost=0, growth_cost=3,  mass=1, consumption_value=1),
+    CellType.NULL:        CellProps(0, 0,  0, 0,  0, 0,  '#000000', 'Empty'),
+    CellType.SOFT_TISSUE: CellProps(1, 3,  1, 1,  0, 0,  '#e8b4a0', 'Soft Tissue'),
+    CellType.MOUTH:       CellProps(2, 10, 3, 0,  0, 0,  '#cc3333', 'Mouth'),
+    CellType.FLAGELLA:    CellProps(2, 10, 1, 10, 0, 0,  '#cc88dd', 'Flagella'),
+    CellType.EYE:         CellProps(3, 8,  2, 0,  0, 0,  '#ffffff', 'Eye'),
+    CellType.FOOD:        CellProps(0, 10, 5, 0,  0, 10, '#66dd66', 'Food'),
 }
+
+
+def get_cell_type_metadata() -> list[dict[str, object]]:
+    return [
+        {
+            "id": int(ct),
+            "name": props.display_name,
+            "color": props.color,
+        }
+        for ct, props in CELL_PROPERTIES.items()
+    ]
 
 class CellActionType(IntEnum):
     DESTROY = 0    # remove cell at target, gain energy
