@@ -19,6 +19,16 @@ from simulator.tick_movement import (
     commit_temp_grid,
     deduct_movement_costs,
 )
+from simulator.tick_death import (
+    mark_organism_death,
+    clear_dead_cells,
+    init_connectivity_labels,
+    propagate_connectivity,
+    count_components,
+    find_best_component,
+    remove_disconnected_cells,
+    clear_connectivity_flags,
+)
 
 ti.init(arch=ti.cpu, default_ip=ti.i32, default_fp=ti.f32)
 
@@ -56,6 +66,7 @@ class Organism:
     brain_move_dir: ti.i32
     brain_wants_grow: ti.i32
     brain_wants_reproduce: ti.i32
+    needs_connectivity_check: ti.i8
 
 
 @ti.data_oriented
@@ -77,8 +88,6 @@ class SimulationEngine:
         self.default_body_plan: BodyPlanProvider = StubBodyPlan()
         self.default_sensor: SensorAggregator = StubSensor()
 
-        self._organisms_took_damage: set[OrganismId] = set()
-
         # Taichi Fields
         self.grid = GridCell.field(shape=self.grid_size)
         self.temp_grid = GridCell.field(shape=self.grid_size)
@@ -96,6 +105,12 @@ class SimulationEngine:
 
         self.grow_claim_combined = ti.field(dtype=ti.i64, shape=self.grid_size)
 
+        # Connectivity fields
+        self.labels = ti.field(dtype=ti.i32, shape=self.grid_size)
+        self.connectivity_changed = ti.field(dtype=ti.i32, shape=())
+        self.component_size = ti.field(dtype=ti.i32, shape=self.grid_size)
+        self.best_component = ti.field(dtype=ti.i64, shape=MAX_ORGANISMS)
+
         # Cell type property lookup tables
         self.ct_fields = CellTypeFields()
         self.ct_fields.load()
@@ -109,23 +124,13 @@ class SimulationEngine:
         # sensor_map = self.step_sensors() # removing for minimal sim test
         self.step_brains() # TODO read sensors for brains
 
-        self.claims.fill(0)
-        self.step_movement(
-            self.grid,
-            self.temp_grid,
-            self.organisms,
-            self.next_org_id,
-            self.width,
-            self.height,
-            self.grid_size,
-            self.claims,
-        )
+        self.process_movement()
 
         # self.step_growth() # removing for minimal sim test
-        # self._organisms_took_damage.clear()
         # self.step_actions() # removing for minimal sim test
-        self.compute_zero_cell_death()
-        self.step_death()
+
+        self.process_death_and_disconnection()
+
         self._increment_ages()
 
     def create_organism(
@@ -266,6 +271,19 @@ class SimulationEngine:
 
     # ── Step 4: Movement kernels ──────────────────────────────────
 
+    def process_movement(self):
+        self.claims.fill(0)
+        self.step_movement(
+            self.grid,
+            self.temp_grid,
+            self.organisms,
+            self.next_org_id,
+            self.width,
+            self.height,
+            self.grid_size,
+            self.claims,
+        )
+
     @ti.kernel
     def step_movement(
             self,
@@ -373,26 +391,93 @@ class SimulationEngine:
 
     # ── Step 7: Death and cleanup ───────────────────────────────
 
-    # @ti.kernel
-    # def _kernel_mark_dead_cells(
-    #     self,
-    #     grid: ti.template(),
-    #     org: ti.template(),
-    #     grid_size: ti.i32,
-    # ):
-    #     for idx in range(grid_size):
-    #         oid = grid[idx].organism_id
-    #         if oid > 0 and org[oid - 1].alive == 0:
-    #             grid[idx].organism_id = 0
-    #
-    def step_death(self) -> None:
-        from simulator.tick_death import execute_death
-        execute_death(self)
+    def process_death_and_disconnection(self):
+        self._kernel_step_death(
+            self.grid,
+            self.organisms,
+            self.next_org_id,
+            self.grid_size,
+        )
 
-    def compute_zero_cell_death(self) -> None:
-        for org_idx in range(self.next_org_id):
-            if self.organisms[org_idx].alive == 1 and self.organisms[org_idx].cell_count == 0:
-                self.organisms[org_idx].alive = 0
+        self._connectivity_init(
+            self.grid, self.organisms, self.labels, self.grid_size,
+        )
+        while True:
+            self.connectivity_changed[None] = 0
+            self._connectivity_propagate(
+                self.grid, self.organisms, self.labels,
+                self.connectivity_changed, self.width, self.height, self.grid_size,
+            )
+            if self.connectivity_changed[None] == 0:
+                break
+        self.component_size.fill(0)
+        self.best_component.fill(0)
+        self._connectivity_resolve(
+            self.grid, self.organisms, self.labels,
+            self.component_size, self.best_component,
+            self.next_org_id, self.grid_size,
+        )
+
+    @ti.kernel
+    def _kernel_step_death(
+        self,
+        grid: ti.template(),
+        organisms: ti.template(),
+        next_org_id: ti.i32,
+        grid_size: ti.i32,
+    ):
+        for oid in range(next_org_id):
+            mark_organism_death(oid, organisms)
+        for idx in range(grid_size):
+            clear_dead_cells(idx, grid, organisms)
+        for oid in range(next_org_id):
+            if organisms[oid].alive == 1:
+                organisms[oid].needs_connectivity_check = ti.cast(1, ti.i8)
+
+    @ti.kernel
+    def _connectivity_init(
+        self,
+        grid: ti.template(),
+        organisms: ti.template(),
+        labels: ti.template(),
+        grid_size: ti.i32,
+    ):
+        for idx in range(grid_size):
+            init_connectivity_labels(idx, grid, organisms, labels)
+
+    @ti.kernel
+    def _connectivity_propagate(
+        self,
+        grid: ti.template(),
+        organisms: ti.template(),
+        labels: ti.template(),
+        changed: ti.template(),
+        width: ti.i32,
+        height: ti.i32,
+        grid_size: ti.i32,
+    ):
+        for idx in range(grid_size):
+            propagate_connectivity(idx, grid, organisms, labels, changed, width, height)
+
+    @ti.kernel
+    def _connectivity_resolve(
+        self,
+        grid: ti.template(),
+        organisms: ti.template(),
+        labels: ti.template(),
+        component_size: ti.template(),
+        best_component: ti.template(),
+        next_org_id: ti.i32,
+        grid_size: ti.i32,
+    ):
+        for idx in range(grid_size):
+            count_components(idx, grid, organisms, labels, component_size)
+        for idx in range(grid_size):
+            find_best_component(idx, grid, organisms, labels, component_size, best_component)
+        for idx in range(grid_size):
+            remove_disconnected_cells(idx, grid, organisms, labels, best_component)
+        for oid in range(next_org_id):
+            clear_connectivity_flags(oid, organisms)
 
     @ti.kernel
     def _kernel_increment_ages(
