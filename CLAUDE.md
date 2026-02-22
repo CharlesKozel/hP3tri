@@ -30,7 +30,7 @@ This project is a **2D artificial life evolution simulator** where genetically d
 - Always use 4 spaces for indentation.
 
 #### **Python**:
- - ALWAYS include type hints and type annotations were possible.
+ - ALWAYS include type hints and type annotations were possible. (Except in Taichi kernels, where it breaks compilation)
 
 ### Key Libraries & Frameworks
 - **Jep (Java Embedded Python)**: Embeds a Python interpreter inside the JVM process. Kotlin calls Python functions directly with near-zero overhead. NumPy arrays can be shared with minimal copying. This avoids subprocess/serialization overhead of a client-server architecture.
@@ -112,11 +112,9 @@ All behind clean interfaces. Implementations can be swapped via configuration:
 ---
 
 
-## Implementation Phases
+## Implementation Phase Guidelines
 
-Build in this order. Each phase produces a runnable, testable system.
-
-Current Phase: 2
+Do not strictly adhere to these, they are a guideline only.
 
 ### Phase 2: Manual Organisms & Basic Simulation
 - Implement organism entity (ID, cell set, energy pool).

@@ -110,8 +110,6 @@ class CellTypeFields:
 
     def load(self) -> None:
         for ct, props in CELL_PROPERTIES.items():
-            print(ct)
-            print(props)
             self.maintenance_cost[ct] = props.maintenance_cost
             self.growth_cost[ct] = props.growth_cost
             self.mass[ct] = props.mass

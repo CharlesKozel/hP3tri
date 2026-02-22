@@ -6,6 +6,7 @@ import jep.SharedInterpreter
 class JepBridge(pythonSourceDir: String) {
     private val interpreter: SharedInterpreter = SharedInterpreter().apply {
         exec("import sys")
+        exec("sys.stdout.reconfigure(line_buffering=True)")
         exec("sys.path.insert(0, '$pythonSourceDir')")
         exec("from simulator.sim_runner import run_simulation")
         exec("from simulator.cell_types import get_cell_type_metadata")

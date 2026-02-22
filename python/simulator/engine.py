@@ -1,10 +1,9 @@
 import taichi as ti
 import numpy as np
 from numpy.typing import NDArray
-from simulator.hex_grid import TerrainType, NEIGHBOR_OFFSETS, neighbor_offset
 from simulator.cell_types import CellTypeFields, CellType
-from simulator.sim_types import OrganismId, GenomeId, GenomeData, DEAD
-from interfaces.brain import BrainProvider, OrganismView, SensorInputs, BrainOutput
+from simulator.sim_types import OrganismId, GenomeId, DEAD
+from interfaces.brain import BrainProvider, BrainOutput
 from interfaces.body_plan import BodyPlanProvider
 from interfaces.sensor import SensorAggregator
 from stubs.stub_brain import StubBrain
@@ -106,7 +105,6 @@ class SimulationEngine:
         self.tick_count += 1
 
         self.recompute_aggregates()
-        # self.compute_zero_cell_death()
         # self.step_resources() # TODO implement photosynthesis etc.
         # sensor_map = self.step_sensors() # removing for minimal sim test
         self.step_brains() # TODO read sensors for brains
@@ -126,7 +124,8 @@ class SimulationEngine:
         # self.step_growth() # removing for minimal sim test
         # self._organisms_took_damage.clear()
         # self.step_actions() # removing for minimal sim test
-        # self.step_death()
+        self.compute_zero_cell_death()
+        self.step_death()
         self._increment_ages()
 
     def create_organism(
@@ -386,14 +385,14 @@ class SimulationEngine:
     #         if oid > 0 and org[oid - 1].alive == 0:
     #             grid[idx].organism_id = 0
     #
-    # def step_death(self) -> None:
-    #     from simulator.tick_death import execute_death
-    #     execute_death(self)
-    #
-    # def compute_zero_cell_death(self) -> None:
-    #     for org_idx in range(self.next_org_id):
-    #         if self.organisms[org_idx].alive == 1 and self.organisms[org_idx].cell_count == 0:
-    #             self.organisms[org_idx].alive = 0
+    def step_death(self) -> None:
+        from simulator.tick_death import execute_death
+        execute_death(self)
+
+    def compute_zero_cell_death(self) -> None:
+        for org_idx in range(self.next_org_id):
+            if self.organisms[org_idx].alive == 1 and self.organisms[org_idx].cell_count == 0:
+                self.organisms[org_idx].alive = 0
 
     @ti.kernel
     def _kernel_increment_ages(
