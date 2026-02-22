@@ -1,83 +1,81 @@
-from __future__ import annotations
+import taichi as ti
+from simulator.hex_grid import neighbor_offset
+from simulator.sim_types import ALIVE
 
-from collections import deque
-from typing import TYPE_CHECKING
-
-from simulator.hex_grid import neighbors
-
-if TYPE_CHECKING:
-    from simulator.engine import SimulationEngine
+SENTINEL_LABEL: int = 0x7FFFFFFF
 
 
-def execute_death(engine: SimulationEngine) -> None:
-    _check_starvation(engine)
-    _mark_dead_cells(engine)
-    _check_connectivity(engine)
+@ti.func
+def mark_organism_death(oid, organisms):
+    if organisms[oid].alive == ALIVE:
+        if organisms[oid].cell_count == 0 or organisms[oid].energy <= 0:
+            organisms[oid].alive = 0
 
 
-def _check_starvation(engine: SimulationEngine) -> None:
-    for org_idx in range(engine.organism_manager.highest_id_used):
-        if engine.organisms[org_idx].alive == 1 and engine.organisms[org_idx].energy <= 0:
-            engine.organisms[org_idx].alive = 0
+@ti.func
+def clear_dead_cells(idx, grid, organisms):
+    oid = grid[idx].organism_id
+    if oid > 0 and organisms[oid].alive == 0:
+        grid[idx].organism_id = 0
 
 
-def _mark_dead_cells(engine: SimulationEngine) -> None:
-    engine._kernel_mark_dead_cells(
-        engine.grid,
-        engine.organisms,
-        engine.grid_size,
-    )
+@ti.func
+def init_connectivity_labels(idx, grid, organisms, labels):
+    oid = grid[idx].organism_id
+    if oid > 0 and organisms[oid].needs_connectivity_check == 1:
+        labels[idx] = idx
+    else:
+        labels[idx] = SENTINEL_LABEL
 
 
-def _check_connectivity(engine: SimulationEngine) -> None:
-    if not engine._organisms_took_damage:
-        return
+@ti.func
+def propagate_connectivity(idx, grid, organisms, labels, changed, width, height):
+    oid = grid[idx].organism_id
+    if oid > 0 and organisms[oid].needs_connectivity_check == 1:
+        my_label = labels[idx]
+        q = idx % width
+        r = idx // width
+        min_label = my_label
+        for d in ti.static(range(6)):
+            off = neighbor_offset(d)
+            nq = (q + off[0]) % width
+            nr = (r + off[1]) % height
+            nidx = nr * width + nq
+            if grid[nidx].organism_id == oid:
+                nl = labels[nidx]
+                if nl < min_label:
+                    min_label = nl
+        if min_label < my_label:
+            labels[idx] = min_label
+            changed[None] = 1
 
-    grid_oid = engine.grid.organism_id.to_numpy()
-    width = engine.width
-    height = engine.height
 
-    for org_id in list(engine._organisms_took_damage):
-        org_idx = org_id - 1
-        if engine.organisms[org_idx].alive != 1:
-            continue
+@ti.func
+def count_components(idx, grid, organisms, labels, component_size):
+    oid = grid[idx].organism_id
+    if oid > 0 and organisms[oid].needs_connectivity_check == 1:
+        ti.atomic_add(component_size[labels[idx]], 1)
 
-        cell_positions: list[tuple[int, int]] = []
-        for idx in range(engine.grid_size):
-            if grid_oid[idx] == org_id:
-                q = idx % width
-                r = idx // width
-                cell_positions.append((q, r))
 
-        if len(cell_positions) <= 1:
-            continue
+@ti.func
+def find_best_component(idx, grid, organisms, labels, component_size, best_component):
+    oid = grid[idx].organism_id
+    if oid > 0 and organisms[oid].needs_connectivity_check == 1:
+        label = labels[idx]
+        size = component_size[label]
+        encoded = (ti.cast(size, ti.i64) << 32) | ti.cast(label, ti.i64)
+        ti.atomic_max(best_component[oid], encoded)
 
-        all_cells = set(cell_positions)
-        components: list[set[tuple[int, int]]] = []
-        remaining = set(all_cells)
 
-        while remaining:
-            start = next(iter(remaining))
-            component: set[tuple[int, int]] = set()
-            queue: deque[tuple[int, int]] = deque([start])
-            component.add(start)
+@ti.func
+def remove_disconnected_cells(idx, grid, organisms, labels, best_component):
+    oid = grid[idx].organism_id
+    if oid > 0 and organisms[oid].needs_connectivity_check == 1:
+        best_label = ti.cast(best_component[oid] & ti.i64(0xFFFFFFFF), ti.i32)
+        if labels[idx] != best_label:
+            grid[idx].organism_id = 0
 
-            while queue:
-                cq, cr = queue.popleft()
-                for nq, nr in neighbors(cq, cr, width, height):
-                    if (nq, nr) in remaining and (nq, nr) not in component:
-                        component.add((nq, nr))
-                        queue.append((nq, nr))
 
-            components.append(component)
-            remaining -= component
-
-        if len(components) <= 1:
-            continue
-
-        largest = max(components, key=len)
-        for comp in components:
-            if comp is not largest:
-                for cq, cr in comp:
-                    cidx = cr * width + cq
-                    engine.grid[cidx].organism_id = 0
+@ti.func
+def clear_connectivity_flags(oid, organisms):
+    organisms[oid].needs_connectivity_check = 0
