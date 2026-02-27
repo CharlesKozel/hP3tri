@@ -14,6 +14,7 @@ export interface GridState {
 
 export interface OrganismState {
   id: number;
+  genomeId: number;
   energy: number;
   alive: boolean;
   cellCount: number;

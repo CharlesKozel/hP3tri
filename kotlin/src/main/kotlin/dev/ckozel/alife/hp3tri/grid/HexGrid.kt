@@ -21,6 +21,7 @@ data class GridState(
 @Serializable
 data class OrganismState(
     val id: Int,
+    val genomeId: Int,
     val energy: Int,
     val alive: Boolean,
     val cellCount: Int,

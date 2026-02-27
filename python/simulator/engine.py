@@ -606,6 +606,7 @@ class SimulationEngine:
         for oid in range(1, self.next_org_id):
             organisms.append({
                 "id": oid,
+                "genomeId": int(self.organisms[oid].genome_id),
                 "energy": int(self.organisms[oid].energy),
                 "alive": bool(self.organisms[oid].alive),
                 "cellCount": int(self.organisms[oid].cell_count),

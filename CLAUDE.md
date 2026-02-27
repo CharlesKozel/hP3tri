@@ -1,4 +1,9 @@
 # CLAUDE.md — Artificial Life Evolution Simulator
+## 0. Working TODO
+* need to isolate visually organisms of different genomes, like give each genome a small border around hex hex of a color to distinguish it from others
+  also draw a boarder around each organism isolating/combinging its inner cells, so as to distinguish between other organisms
+
+* CONSIDER: before running a full simm for evolution, run a viability check, that the organism lives in this condition, IE no competition just food.
 
 ## 1. Project Overview
 

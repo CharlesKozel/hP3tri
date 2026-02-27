@@ -1,5 +1,6 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import HexGridCanvas from './components/HexGridCanvas';
+import StatsPanel from './components/StatsPanel';
 import type {CellTypeInfo, ReplayInfo, SimulationState} from './types';
 
 export default function App() {
@@ -11,6 +12,7 @@ export default function App() {
     const [playbackSpeed, setPlaybackSpeed] = useState(200);
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
+    const [statsOpen, setStatsOpen] = useState(true);
     const intervalRef = useRef<number | null>(null);
 
     const fetchReplay = useCallback(async () => {
@@ -116,75 +118,83 @@ export default function App() {
     if (!replay || !replayInfo) return null;
 
     const frame = replay[currentTick];
-    const organism = frame?.organisms[0];
 
     return (
-        <div style={{width: '100vw', height: '100vh', background: '#111', display: 'flex', flexDirection: 'column'}}>
-            <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 16,
-                padding: '8px 16px',
-                background: '#1a1a1a',
-                borderBottom: '1px solid #333',
-                fontFamily: 'monospace',
-                fontSize: 13,
-                color: '#ccc',
-                flexShrink: 0,
-                flexWrap: 'wrap',
-            }}>
-                <span>Tick: {currentTick}/{replayInfo.totalTicks}</span>
-                <span style={{color: frame?.status === 'RUNNING' ? '#4c4' : '#c44'}}>
-                    {frame?.status}
-                </span>
-                {organism && (
-                    <span>Energy: {organism.energy}</span>
-                )}
-                <div style={{display: 'flex', gap: 4}}>
-                    <button onClick={handleStepBack} style={btnStyle} title="Step back">
-                        {'<'}
-                    </button>
-                    <button
-                        onClick={() => setPlaying(!playing)}
-                        style={{...btnStyle, width: 48}}
-                    >
-                        {playing ? 'II' : '>'}
-                    </button>
-                    <button onClick={handleStepForward} style={btnStyle} title="Step forward">
-                        {'>'}
-                    </button>
-                </div>
-                <input
-                    type="range"
-                    min={0}
-                    max={replay.length - 1}
-                    value={currentTick}
-                    onChange={(e) => {
-                        setPlaying(false);
-                        setCurrentTick(Number(e.target.value));
-                    }}
-                    style={{flex: 1, minWidth: 100}}
-                />
-                <label style={{display: 'flex', alignItems: 'center', gap: 8}}>
-                    Speed:
+        <div style={{width: '100vw', height: '100vh', background: '#111', display: 'flex'}}>
+            <div style={{flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column'}}>
+                <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 16,
+                    padding: '8px 16px',
+                    background: '#1a1a1a',
+                    borderBottom: '1px solid #333',
+                    fontFamily: 'monospace',
+                    fontSize: 13,
+                    color: '#ccc',
+                    flexShrink: 0,
+                    flexWrap: 'wrap',
+                }}>
+                    <span>Tick: {currentTick}/{replayInfo.totalTicks}</span>
+                    <span style={{color: frame?.status === 'RUNNING' ? '#4c4' : '#c44'}}>
+                        {frame?.status}
+                    </span>
+                    <div style={{display: 'flex', gap: 4}}>
+                        <button onClick={handleStepBack} style={btnStyle} title="Step back">
+                            {'<'}
+                        </button>
+                        <button
+                            onClick={() => setPlaying(!playing)}
+                            style={{...btnStyle, width: 48}}
+                        >
+                            {playing ? 'II' : '>'}
+                        </button>
+                        <button onClick={handleStepForward} style={btnStyle} title="Step forward">
+                            {'>'}
+                        </button>
+                    </div>
                     <input
                         type="range"
-                        min={50}
-                        max={1000}
-                        step={50}
-                        value={playbackSpeed}
-                        onChange={(e) => setPlaybackSpeed(Number(e.target.value))}
-                        style={{width: 80}}
+                        min={0}
+                        max={replay.length - 1}
+                        value={currentTick}
+                        onChange={(e) => {
+                            setPlaying(false);
+                            setCurrentTick(Number(e.target.value));
+                        }}
+                        style={{flex: 1, minWidth: 100}}
                     />
-                    <span style={{width: 45}}>{playbackSpeed}ms</span>
-                </label>
-                <button onClick={handleReset} style={btnStyle}>
-                    Reset
-                </button>
+                    <label style={{display: 'flex', alignItems: 'center', gap: 8}}>
+                        Speed:
+                        <input
+                            type="range"
+                            min={50}
+                            max={1000}
+                            step={50}
+                            value={playbackSpeed}
+                            onChange={(e) => setPlaybackSpeed(Number(e.target.value))}
+                            style={{width: 80}}
+                        />
+                        <span style={{width: 45}}>{playbackSpeed}ms</span>
+                    </label>
+                    <button onClick={handleReset} style={btnStyle}>
+                        Reset
+                    </button>
+                    <button onClick={() => setStatsOpen(!statsOpen)} style={btnStyle} title="Stats">
+                        {'\u2630'}
+                    </button>
+                </div>
+                <div style={{flex: 1, minHeight: 0}}>
+                    {frame && <HexGridCanvas grid={frame.grid} organisms={frame.organisms} cellTypes={cellTypes}/>}
+                </div>
             </div>
-            <div style={{flex: 1, minHeight: 0}}>
-                {frame && <HexGridCanvas grid={frame.grid} organisms={frame.organisms} cellTypes={cellTypes}/>}
-            </div>
+            <StatsPanel
+                organisms={frame?.organisms ?? []}
+                currentTick={currentTick}
+                totalTicks={replayInfo.totalTicks}
+                open={statsOpen}
+                onClose={() => setStatsOpen(false)}
+            />
         </div>
     );
 }

@@ -19,12 +19,14 @@ def run_simulation(config: dict) -> list[dict]:
         seed_r=16,
         seed_cell_type=int(CellType.FLAGELLA),
         starting_energy=10_000,
+        genome_id=1,
     )
     engine.create_organism(  # org 2: dir (2 % 6)=2 → (0,-1)
         seed_q=8,
         seed_r=16,
         seed_cell_type=int(CellType.FLAGELLA),
         starting_energy=10_000,
+        genome_id=1,
     )
 
     # --- Test 2: Speed priority (FLAGELLA vs SOFT_TISSUE toward same area) ---
@@ -35,12 +37,14 @@ def run_simulation(config: dict) -> list[dict]:
         seed_r=8,
         seed_cell_type=int(CellType.FLAGELLA),
         starting_energy=10_000,
+        genome_id=2,
     )
     engine.create_organism(  # org 4: dir (4 % 6)=4 → (-1,+1)
         seed_q=18,
         seed_r=7,
         seed_cell_type=int(CellType.SOFT_TISSUE),
         starting_energy=10_000,
+        genome_id=2,
     )
 
     # --- Test 3: Mobile blocked by immobile ---
@@ -51,12 +55,14 @@ def run_simulation(config: dict) -> list[dict]:
         seed_r=24,
         seed_cell_type=int(CellType.FLAGELLA),
         starting_energy=10_000,
+        genome_id=3,
     )
     engine.create_organism(  # org 6: stationary MOUTH in the way
         seed_q=10,
         seed_r=26,
         seed_cell_type=int(CellType.MOUTH),
         starting_energy=10_000,
+        genome_id=3,
     )
 
     replay: list[dict] = []

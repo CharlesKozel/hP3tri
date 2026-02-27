@@ -43,6 +43,7 @@ class JepBridge(pythonSourceDir: String) {
         val organisms = orgList.map { o ->
             OrganismState(
                 id = (o["id"] as Number).toInt(),
+                genomeId = (o["genomeId"] as Number).toInt(),
                 energy = (o["energy"] as Number).toInt(),
                 alive = o["alive"] as Boolean,
                 cellCount = (o["cellCount"] as Number).toInt(),
