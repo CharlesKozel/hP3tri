@@ -1,5 +1,6 @@
 import {useMemo} from 'react';
 import type {OrganismState} from '../types';
+import {GENOME_IDENTITIES} from '../types';
 
 interface StatsPanelProps {
     organisms: OrganismState[];
@@ -104,7 +105,16 @@ export default function StatsPanel({organisms, currentTick, totalTicks, open, on
                             fontWeight: 'bold',
                             color: '#eee',
                         }}>
-                            <span>Genome {g.genomeId}</span>
+                            <span style={{display: 'flex', alignItems: 'center', gap: 6}}>
+                                <span style={{
+                                    display: 'inline-block',
+                                    width: 12,
+                                    height: 12,
+                                    borderRadius: 2,
+                                    background: GENOME_IDENTITIES[g.genomeId % GENOME_IDENTITIES.length].tint,
+                                }} />
+                                {GENOME_IDENTITIES[g.genomeId % GENOME_IDENTITIES.length].label} Genome {g.genomeId}
+                            </span>
                             <span style={{color: '#999', fontWeight: 'normal'}}>
                                 {g.count} organism{g.count !== 1 ? 's' : ''}
                             </span>

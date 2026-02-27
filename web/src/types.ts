@@ -55,6 +55,20 @@ export const TERRAIN_COLORS: Record<number, string> = {
   [TerrainType.TOXIC]: '#4a1a4a',
 };
 
+export interface GenomeIdentity {
+    tint: string;
+    patternId: number;
+    label: string;
+}
+
+export const GENOME_IDENTITIES: GenomeIdentity[] = [
+    { tint: '#4488ff', patternId: 0, label: '★' },
+    { tint: '#44cc44', patternId: 1, label: '☽' },
+    { tint: '#ff6644', patternId: 2, label: '◆' },
+    { tint: '#cc44ff', patternId: 3, label: '●' },
+    { tint: '#ffcc22', patternId: 4, label: '✚' },
+];
+
 export const TERRAIN_TYPE_NAMES: Record<number, string> = {
   [TerrainType.GROUND]: 'Ground',
   [TerrainType.WATER]: 'Water',
