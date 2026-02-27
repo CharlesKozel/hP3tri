@@ -1,8 +1,5 @@
 # CLAUDE.md — Artificial Life Evolution Simulator
 ## 0. Working TODO
-* need to isolate visually organisms of different genomes, like give each genome a small border around hex hex of a color to distinguish it from others
-  also draw a boarder around each organism isolating/combinging its inner cells, so as to distinguish between other organisms
-
 * CONSIDER: before running a full simm for evolution, run a viability check, that the organism lives in this condition, IE no competition just food.
 
 ## 1. Project Overview
@@ -120,66 +117,9 @@ All behind clean interfaces. Implementations can be swapped via configuration:
 ---
 
 
-## Implementation Phase Guidelines
 
-Do not strictly adhere to these, they are a guideline only.
 
-### Phase 2: Manual Organisms & Basic Simulation
-- Implement organism entity (ID, cell set, energy pool).
-- Lookup-table body plan provider.
-- Hardcoded/scripted brains for test organisms.
-- Implement the full tick loop: resource regen, sensor aggregation (basic), brain eval (scripted), action execution (growth, movement), combat resolution, energy accounting, death/cleanup.
-- Create 3-4 manual test organisms: a stationary plant, a moving herbivore, an armored defender, a predator.
-- Run matches between them. Verify mechanics work: growth, combat, movement, energy flow, starvation, regeneration.
-- **Deliverable**: a working petri dish simulator with hand-designed creatures competing.
-
-### Phase 3: Rule-Based Brain & Sensor Aggregation
-- Implement the body-invariant sensor aggregator.
-- Implement rule-based brain with configurable parameters.
-- Replace hardcoded brains on test organisms with rule-based brains (hand-tune parameters to replicate intended behavior).
-- Verify that organisms behave reasonably with the rule-based system.
-- **Deliverable**: autonomous organisms competing with parameterized behavior.
-
-### Phase 4: Genome, Mutation, and Basic Evolution
-- Implement the genome data structure (float vector encoding rule parameters + metabolic parameters).
-- Implement mutation and crossover operators.
-- Implement simple tournament evolution loop (Kotlin orchestrator).
-- Wire up Jep bridge: Kotlin sends genomes to Python, Python runs match, returns scores.
-- Use lookup-table body plans initially (randomly generated simple shapes, or evolve just brain/metabolism parameters with fixed bodies).
-- Run evolution for many generations. Verify fitness improves over time.
-- **Deliverable**: working evolutionary loop producing increasingly fit organisms.
-
-### Phase 5: CPPN Body Plan
-- Implement CPPN evaluation in Python.
-- Add CPPN weights and activation functions to genome.
-- Implement developmental growth from seed using CPPN queries.
-- Implement symmetry modes.
-- Evolve body plans along with brain parameters and metabolism.
-- **Deliverable**: organisms with evolved body shapes competing. This is where it gets interesting.
-
-### Phase 6: GPU Acceleration
-- Port the simulation tick kernel to Taichi.
-- Spatial hashing for neighbor queries.
-- Batch CPPN evaluation on GPU.
-- Benchmark: measure ticks/second at various grid sizes and organism counts.
-- **Deliverable**: GPU-accelerated simulation running significantly faster than CPU.
-
-### Phase 7: Visualization & Replay
-- Implement match replay recording (serialize grid state each tick, or record actions for deterministic replay).
-- Build a visualization tool to watch replays (OpenRNDR, web viewer, or Taichi GUI).
-- **Deliverable**: ability to watch evolved organisms compete visually.
-
-### Phase 8: Refinement & Expansion
-- Expand cell type roster toward ~100 types.
-- **Implement terrain types**: water, rock, fertile soil, toxic, etc. with interaction rules defined in config. Implement terrain map generation strategies (procedural generation of lakes, rock formations, fertile patches). Terrain data structure is already in grid from Phase 1.
-- Tune balance parameters (cell costs, damage values, energy rates, terrain modifiers).
-- Experiment with evolution strategies (MAP-Elites for diversity, Elo matchmaking).
-- Experiment with NN brains as upgrade from rule-based.
-- Add more visualization features (genome browser, phylogenetic trees, statistics).
-
----
-
-## 4. Core Domain Model
+## Core Domain Model
 
 ### Hex Grid
 - **Coordinate system**: Axial coordinates (q, r). Each hex has exactly 6 equidistant neighbors.
@@ -199,30 +139,7 @@ Each organism has:
 
 ### Cells (~100 types, examples)
 Cell Attributes:
-- Generation Cost: energy cost to produce.
-- Upkeep Cost: energy cost per tick.
-- Mass: Contributes to movement cost.
-- Consumption Value: energy gained when consumed by another cell/organism.
-- Abilities: Unique to each cell type, defines possible interactions with other cells and the environment.
-- Visuals: Color + Icon, ONLY for Web Display.
-
-Each cell type has defined interactions with neighbors and the environment:
-
-**Structural**: skin (basic, cheap), armor (damage resistant, expensive), membrane (permeable, allows resource absorption).
-
-**Offense**: mouth (consumes adjacent food/foreign cells), spike (damages adjacent foreign cells passively), teeth (enhances mouth damage).
-
-**Sensing**: eye (detects entities at range along line-of-sight), chemical sensor (detects environmental chemical gradients), touch sensor (detects adjacent contact).
-
-**Locomotion**: flagella (enables whole-organism movement), cilia (enables slow amoeboid movement), pseudopod (enables directional extension).
-
-**Metabolism**: photosynthetic membrane (generates energy from light), root (absorbs nutrients from resource tiles), storage vacuole (increases max energy capacity).
-
-**Reproduction**: reproductive cell (required to produce offspring seeds).
-
-**Signaling**: signal emitter (broadcasts chemical signals), pigment (visual signaling to other organisms).
-
-The full cell type roster is a design/balance parameter — start with ~20 core types and expand.
+see cell_types.py
 
 ### Energy System
 - Every cell costs maintenance energy per tick (varies by cell type), total energy cost for all cells is subtracted from the organism each tick.
@@ -235,90 +152,9 @@ The full cell type roster is a design/balance parameter — start with ~20 core 
 
 ---
 
-## 5. Module Interfaces
-
-These interfaces define the contracts between swappable modules. Implementations vary but inputs/outputs are fixed.
-
-### Body Plan Provider
-```
-Interface: BodyPlanProvider
-Input: (same as Brain Provider)
-  - organism_state:
-   - hex_position: (q, r) of organism center / initial cell.
-   - oranism_cells: set of cell positions (q, r) and cell types.
-   - organism_age: int (developmental time steps since birth)
-   - organism_energy: int (current energy pool)
-  - cell_sensor_inputs: body-invariant sensor vector.
-  - genome_data: opaque blob (CPPN weights, lookup table, etc.)
-Output:
-  - new_cells: coordinates + cell types of new cells to grow.
-```
-
-### Brain Provider
-```
-Interface: BrainProvider
-Input (same as Body Plan Provider):
-  - organism_state:
-   - hex_position: (q, r) of organism center / initial cell.
-   - oranism_cells: set of cell positions (q, r) and cell types.
-   - organism_age: int (developmental time steps since birth)
-   - organism_energy: int (current energy pool)
-  - cell_sensor_inputs: body-invariant sensor vector, same as brain recieves.
-  - genome_data: opaque blob (CPPN weights, lookup table, etc.)
-Output (each can be null/zero/empty for no action):
-  - movement_direction: 6 possible hex directions
-  - new_cells: coordinates + cell types of new cells to grow.
-  - reproduce: coordinates + cell types of offspring seeds, will cause new organisms to be instantiated if placed.
-  - actions: for each cell with possible actions, that action's parameters. (initially all acting cells, ex mouthes/teeth, act when viable)
-  - memory: some persistent state for the brain (unsure the structure yet)
-```
-
-### Sensor Aggregator
-```
-Interface: SensorAggregator
-Input:
-  - organism's sensor cells (positions, types, orientations)
-  - local world state visible to those cells
-Output:
-  - the body-invariant sensor vector (as defined in BrainProvider input)
-```
-
-### Genome Representation
-```
-Interface: Genome
-Methods:
-  - mutate(mutation_rate: float) -> Genome
-  - crossover(other: Genome) -> Genome
-  - get_body_plan_data() -> generates a BodyPlanProvider
-  - get_brain_data() -> generates a BrainProvider
-```
-
-### Evolution Strategy
-```
-Interface: EvolutionStrategy
-Methods:
-  - initialize_population(size: int) -> List<Genome>
-  - select_match_participants(population: List<Genome>) -> List<List<Genome>>
-  - record_match_result(participants: List<Genome>, scores: List<float>)
-  - produce_next_generation(population: List<Genome>) -> List<Genome>
-```
-
-### Match Configuration
-```
-Data class: MatchConfig
-Fields:
-  - grid_width: int
-  - grid_height: int  
-  - tick_limit: int
-  - terrain_map: TerrainConfig (terrain type generation strategy and parameters)
-  - competitor_list: List<Genome>
-  - initial_placement: PlacementStrategy (spaced, random, clustered)
-  - random_seed: long (for determinism)
-```
-
 ---
 
-## 6. Simulation Tick Rules (CORE ENGINE)
+## Simulation Tick Rules (CORE ENGINE)
 
 Each tick executes the following steps **in this exact order** 
 (order matters for determinism, must deterministically resolve conflicts):
@@ -367,46 +203,6 @@ movement frequency. No floating-point arithmetic needed.
 
 Organisms with zero locomotion_power are **immobile** — they never accumulate movement points.
 
-#### **4b. Movement Eligibility Check**
-An organism is eligible to move this tick if ALL of the following are true:
-1. It is **movement-ready** (`movement_points >= total_cell_mass`).
-2. It has sufficient energy: `needed_energy = ceil(total_cell_mass / MOVEMENT_ENERGY_CONSTANT)`
-   and `needed_energy <= organism.energy`.
-3. Its brain requested movement this tick.
-
-
-#### **4c. Body Shift (Primary Movement)**
-
-Organisms who are eligible to move, and whose brain tick computation output a movement request
-will attempt to shift all cells exactly 1 hex in the brain's chosen hex-direction simultaneously.
-Conflict resolution is resolved by priority calculation (see below), movement failed due to conflict
-results in no change to the organism's position.
-
-Execution:
-1. For each cell in the organism, compute the destination hex (current position + direction offset, with toroidal wrapping).
-2. Validate ALL destination hexes:
-   - Destination terrain is eligible for cell placement.
-   - Destination is not occupied by another organism's cell.
-   - Destinations that overlap with the organism's own current cells are always valid (organism passing through its own footprint).
-3. Compute Organism's Movement Priority Rank (summing these values):
-   - (+) speed_score * TOP_PRIORITY_SCALE (highest priority: speed)
-     where speed_score = locomotion_power / total_cell_mass (integer division)
-   - (+) (MAX_ORGANISM_CELLS - organism_cell_count) * MID_PRIORITY_SCALE (medium priority: fewer cells move first)
-   - (+) organism_id (low priority: higher id (younger) organisms move first)
-   - IMPORTANT: choose scale factors so that lower-priority tiers cannot supersede higher ones,
-     regardless of organism count or cell count.
-4. Generate claims for each destination hex:
-   - For each moving organism, create the set of its desired destination hexes.
-   - Each moving organism writes its organism_id + priority_rank to each of its destination hexes 
-     (via `ti.atomic_max` or equivalent). Priority is a single integer encoding tiebreakers.
-   - If a destination cell is already claimed by a higher priority organism, the claim fails.
-   - Identify organisms that have had all of their claims succeed.
-   - Consider optimizations here, Taichi might have a better way to implement this same conceptual logic.
-5. Move all organisms whose claims succeeded + Deduct Costs
-   - Update the grid state with the new cell-type and organism_id for each successful claim.
-   - Deduct needed_energy from the organism energy.
-   - Deduct movement_points: `movement_points -= total_cell_mass`
-   - Organisms whose claims FAILED retain their movement_points (they were physically blocked, not slow).
 
 ### Step 5: Growth
 Border cells of growing organisms attempt to fill adjacent empty hexes. **Growth is always additive at the border**. 
@@ -458,7 +254,7 @@ IMPORTANT: this kind of movement / growth should be considered when designing br
 
 #### **Reproduction** Special Kind of New Cell Growth
 - Organisms that choose to reproduce and have sufficient energy spawn a seed cell of any cell type in an adjacent empty hex.
-- IMPORTANT: this should happen simultaneously with growth, brains should decide on reproduction at the same time as growth.
+- This should happen simultaneously with growth, brains should decide on reproduction at the same time as growth.
 - The seed carries a copy of the parent's genome (no mutation during match — clones only).
 - Parent's energy is reduced by the reproduction cost + new cell cost + chosen starting energy of seed.
 The seed is a new organism (new ID, same genome) that begins its own developmental growth on subsequent ticks.
@@ -772,193 +568,8 @@ Decisions made during design, with rationale. Do not revisit without good reason
 - Spatial hashing for neighbor queries.
 - Batch CPPN evaluation as parallel kernel.
 
-### Data Layout for GPU Readiness
-Even during CPU phase, use data structures that map cleanly to GPU:
-- **Flat arrays** for grid state (not objects-per-tile).
-- **Struct-of-arrays** layout: separate arrays for cell_type[], organism_id[], etc. rather than array of cell structs. This is more cache-friendly and maps to GPU memory coalescing.
-- **Fixed-size organism data**: cap organism data at fixed sizes (e.g., max 32×32 body plan). Pad smaller organisms. Enables uniform GPU processing.
-- **No per-cell heap allocation**: everything in pre-allocated arrays.
-
 ### Memory Budget (GPU)
-- Grid state: 4.2M tiles × ~20 bytes (including terrain layer) = ~84MB
-- Organism state: 10K organisms × ~4KB each = ~40MB
-- CPPN weights: 10K organisms × ~1600 bytes = ~16MB
-- Working memory, spatial hash, etc.: ~100MB
 - Total: well within 24GB VRAM of RTX 3090.
-
----
-
-## 15. Project Directory Structure
-
-```
-alife-simulator/
-├── CLAUDE.md                          # This file
-├── build.gradle.kts                   # Gradle build with Kotlin DSL
-├── settings.gradle.kts
-├── docker/
-│   ├── Dockerfile                     # JDK + Python + Jep + Taichi + CUDA
-│   ├── docker-compose.yml
-│   └── entrypoint.sh
-├── kotlin/                            # Kotlin sources (orchestrator)
-│   └── src/
-│       ├── main/kotlin/
-│       │   ├── Main.kt                # Entry point
-│       │   ├── config/
-│       │   │   ├── MatchConfig.kt
-│       │   │   ├── EvolutionConfig.kt
-│       │   │   └── SimulatorConfig.kt
-│       │   ├── genome/
-│       │   │   ├── Genome.kt          # Interface
-│       │   │   ├── FloatVectorGenome.kt
-│       │   │   ├── CompositeGenome.kt
-│       │   │   ├── Mutation.kt
-│       │   │   └── Crossover.kt
-│       │   ├── evolution/
-│       │   │   ├── EvolutionStrategy.kt  # Interface
-│       │   │   ├── TournamentSelection.kt
-│       │   │   ├── EloTournament.kt
-│       │   │   └── MapElites.kt
-│       │   ├── tournament/
-│       │   │   ├── TournamentManager.kt
-│       │   │   ├── MatchCoordinator.kt
-│       │   │   └── FitnessAggregator.kt
-│       │   ├── bridge/
-│       │   │   ├── JepBridge.kt       # Kotlin↔Python interface via Jep
-│       │   │   └── DataConversion.kt  # Kotlin types ↔ Python dicts/arrays
-│       │   └── persistence/
-│       │       ├── GenomeDatabase.kt
-│       │       ├── ReplayStore.kt
-│       │       └── Checkpoint.kt
-│       └── test/kotlin/
-│           └── ...
-├── python/                            # Python sources (simulation)
-│   ├── simulator/
-│   │   ├── __init__.py
-│   │   ├── engine.py                  # Main simulation entry point (called from Kotlin)
-│   │   ├── hex_grid.py                # Hex grid data structure, coordinate math
-│   │   ├── world.py                   # Tick loop orchestration
-│   │   ├── combat.py                  # Damage resolution
-│   │   ├── organism.py                # Organism entity management
-│   │   └── movement.py               # Movement mechanics
-│   ├── interfaces/
-│   │   ├── __init__.py
-│   │   ├── body_plan.py               # BodyPlanProvider ABC
-│   │   ├── brain.py                   # BrainProvider ABC
-│   │   └── sensor.py                  # SensorAggregator ABC
-│   ├── body_plans/
-│   │   ├── __init__.py
-│   │   ├── cppn.py                    # CPPN body plan provider
-│   │   └── lookup_table.py            # Manual/template body plan
-│   ├── brains/
-│   │   ├── __init__.py
-│   │   ├── rule_based.py              # Rule-based brain with evolved parameters
-│   │   ├── scripted.py                # Hardcoded NPC brains
-│   │   └── fixed_nn.py               # Fixed-topology neural network brain
-│   ├── sensors/
-│   │   ├── __init__.py
-│   │   └── basic_aggregator.py        # Body-invariant sensor aggregation
-│   └── tests/
-│       └── ...
-├── config/
-│   ├── default_match.json
-│   ├── default_evolution.json
-│   ├── cell_types.json                # Cell type definitions, costs, interactions
-│   └── terrain_types.json             # Terrain type definitions, interaction rules
-└── data/                              # Mounted volume for persistence
-    ├── genomes/
-    ├── replays/
-    └── checkpoints/
-
-```
-
----
-
-## 16. Cell Type Examples
-
-Cell types and their interactions should be hardcoded, along with their action/sensor implementations.
-
-Example attributes, NEEDS TO BE DESIGNED FURTHER, JUST EXAMPLES FOR NOW:
-- **Body plan**::
-```json
-{
-  "cell_types": {
-    "skin": {
-      "maintenance_cost": 1.0,
-      "growth_cost": 5.0,
-      "durability": 10,
-      "description": "Basic structural cell. Cheap, low durability."
-    },
-    "armor": {
-      "maintenance_cost": 3.0,
-      "growth_cost": 15.0,
-      "durability": 50,
-      "description": "High durability structural cell. Expensive."
-    },
-    "mouth": {
-      "maintenance_cost": 2.0,
-      "growth_cost": 10.0,
-      "durability": 8,
-      "bite_damage": 15,
-      "energy_transfer_rate": 0.8,
-      "description": "Consumes adjacent foreign cells. Transfers energy."
-    },
-    "photosynthetic": {
-      "maintenance_cost": 1.5,
-      "growth_cost": 8.0,
-      "durability": 5,
-      "energy_generation": 2.0,
-      "description": "Generates energy from light. Fragile."
-    }
-  }
-}
-```
-
-All numeric values are tunable balance parameters. Start with a small roster (~20 types), playtest, expand.
-
-### Terrain Type Configuration
-
-Terrain types and their interaction rules as hardcoded enums.
-NOTE: just use ground for everything for now.
-
-Examples terrain, NEEDS TO BE DESIGNED FURTHER, JUST EXAMPLES FOR NOW::
-```json
-{
-  "terrain_types": {
-    "ground": {
-      "passable": true,
-      "description": "Default terrain. No special effects."
-    },
-    "water": {
-      "passable": true,
-      "allowed_cell_types": ["membrane", "flagella", "cilia", "mouth", "eye", "photosynthetic", "skin"],
-      "blocked_cell_types": ["root", "armor", "spike"],
-      "movement_cost_multiplier": 0.7,
-      "photosynthesis_multiplier": 0.5,
-      "resource_regen_multiplier": 0.3,
-      "description": "Aquatic terrain. Only lightweight cell types can exist here. Faster movement, less light."
-    },
-    "rock": {
-      "passable": false,
-      "description": "Impassable barrier. No growth, no movement, no resources."
-    },
-    "fertile_soil": {
-      "passable": true,
-      "photosynthesis_multiplier": 2.0,
-      "root_energy_multiplier": 3.0,
-      "resource_regen_multiplier": 2.0,
-      "description": "Rich terrain. Boosts photosynthesis and root energy. Higher resource regeneration."
-    },
-    "toxic": {
-      "passable": true,
-      "damage_per_tick": 2.0,
-      "resource_regen_multiplier": 0.0,
-      "description": "Damages cells each tick. No resources grow here. Passable but costly."
-    }
-  }
-}
-```
-
-**Terrain map generation** is part of MatchConfig. Strategies include: uniform (all ground), random noise, perlin/simplex noise (natural-looking biomes), hand-designed templates, or hybrid approaches. Varying terrain across matches within a generation encourages generalist organisms that can handle diverse environments.
 
 ---
 
@@ -966,7 +577,6 @@ Examples terrain, NEEDS TO BE DESIGNED FURTHER, JUST EXAMPLES FOR NOW::
 
 Items explicitly deferred for later decision:
 
-- **Visualization technology**: create a web view for overall status of simulations, and a visualizer for one match.
 - **NN brain architecture details**: hidden layer sizes, activation functions, recurrent connections. Decide when upgrading from rule-based brain.
 - **NEAT integration**: if/when fixed-topology CPPN proves limiting. Drop-in replacement for body plan genome.
 - **Chemical signaling system**: how organisms emit and sense chemicals. Adds communication and territory marking but increases simulation complexity.
