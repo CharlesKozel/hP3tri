@@ -7,6 +7,7 @@ plugins {
 val ktor_version = "3.1.1"
 
 application {
+    applicationName = "hp3tri"
     mainClass.set("dev.ckozel.alife.hp3tri.MainKt")
     applicationDefaultJvmArgs = listOf(
         "-Djava.library.path=${project.rootDir}/.venv/lib/python3.12/site-packages/jep",

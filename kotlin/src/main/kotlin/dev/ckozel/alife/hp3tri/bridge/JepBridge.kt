@@ -2,22 +2,34 @@ package dev.ckozel.alife.hp3tri.bridge
 
 import dev.ckozel.alife.hp3tri.grid.*
 import jep.SharedInterpreter
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
 
 class JepBridge(pythonSourceDir: String) {
-    private val interpreter: SharedInterpreter = SharedInterpreter().apply {
-        exec("import sys")
-        exec("sys.stdout.reconfigure(line_buffering=True)")
-        exec("sys.path.insert(0, '$pythonSourceDir')")
-        exec("from simulator.sim_runner import run_simulation")
-        exec("from simulator.cell_types import get_cell_type_metadata")
+    private val executor = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "jep-thread").apply { isDaemon = true }
     }
 
-    fun runSimulation(config: Map<String, Any>): List<SimulationState> {
+    private val interpreter: SharedInterpreter = runOnJepThread {
+        SharedInterpreter().apply {
+            exec("import sys")
+            exec("sys.stdout.reconfigure(line_buffering=True)")
+            exec("sys.path.insert(0, '$pythonSourceDir')")
+            exec("from simulator.sim_runner import run_simulation")
+            exec("from simulator.cell_types import get_cell_type_metadata")
+            exec("from evolution.match_runner import run_evolution_match, run_visualizable_match")
+        }
+    }
+
+    private fun <T> runOnJepThread(block: () -> T): T =
+        executor.submit(Callable { block() }).get()
+
+    fun runSimulation(config: Map<String, Any>): List<SimulationState> = runOnJepThread {
         interpreter.set("_config", config)
         interpreter.exec("_result = run_simulation(dict(_config))")
         @Suppress("UNCHECKED_CAST")
         val result = interpreter.getValue("_result") as List<Map<String, Any>>
-        return result.map { convertFrame(it) }
+        result.map { convertFrame(it) }
     }
 
     @Suppress("UNCHECKED_CAST")
@@ -58,11 +70,11 @@ class JepBridge(pythonSourceDir: String) {
         )
     }
 
-    fun getCellTypes(): List<CellTypeInfo> {
+    fun getCellTypes(): List<CellTypeInfo> = runOnJepThread {
         interpreter.exec("_cell_types = get_cell_type_metadata()")
         @Suppress("UNCHECKED_CAST")
         val result = interpreter.getValue("_cell_types") as List<Map<String, Any>>
-        return result.map { m ->
+        result.map { m ->
             CellTypeInfo(
                 id = (m["id"] as Number).toInt(),
                 name = m["name"] as String,
@@ -71,7 +83,25 @@ class JepBridge(pythonSourceDir: String) {
         }
     }
 
+    fun runEvolutionMatch(config: Map<String, Any>, genomes: List<Map<String, Any>>): List<Map<String, Any>> = runOnJepThread {
+        interpreter.set("_match_config", config)
+        interpreter.set("_genomes", genomes)
+        interpreter.exec("_match_result = run_evolution_match(dict(_match_config), [dict(g) for g in _genomes])")
+        @Suppress("UNCHECKED_CAST")
+        interpreter.getValue("_match_result") as List<Map<String, Any>>
+    }
+
+    fun runVisualizableMatch(config: Map<String, Any>, genomes: List<Map<String, Any>>): List<SimulationState> = runOnJepThread {
+        interpreter.set("_vis_config", config)
+        interpreter.set("_vis_genomes", genomes)
+        interpreter.exec("_vis_result = run_visualizable_match(dict(_vis_config), [dict(g) for g in _vis_genomes])")
+        @Suppress("UNCHECKED_CAST")
+        val result = interpreter.getValue("_vis_result") as List<Map<String, Any>>
+        result.map { convertFrame(it) }
+    }
+
     fun close() {
-        interpreter.close()
+        runOnJepThread { interpreter.close() }
+        executor.shutdown()
     }
 }

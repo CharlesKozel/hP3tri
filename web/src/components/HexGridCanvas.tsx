@@ -18,6 +18,9 @@ const CELL_TYPE_ICON_PATHS: Record<number, string> = {
     4: '/icons/eye.svg',
     5: '/icons/spike.svg',
     6: '/icons/food.svg',
+    7: '/icons/photosynthetic.svg',
+    8: '/icons/armor.svg',
+    9: '/icons/skin.svg',
 };
 
 // Convert axial (q, r) to odd-r offset (col, row) for rectangular display.

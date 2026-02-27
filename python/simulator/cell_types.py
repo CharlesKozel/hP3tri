@@ -8,33 +8,21 @@ from simulator.hex_grid import neighbors, index
 from simulator.sim_types import OrganismId, GridIndex, GenomeId, HexGridState
 
 
-# 6 minimal cell types for initial development, IMPORTANT: DONT ADD MORE
 class CellType(IntEnum):
-    NULL = 0 # special type to indicate removing a cell at that index + absorbing its energy
+    NULL = 0
     SOFT_TISSUE = auto()
     MOUTH = auto()
     FLAGELLA = auto()
     EYE = auto()
     SPIKE = auto()
     FOOD = auto()
-
-    # SKIN = auto()
-    # ARMOR = auto()
-    # PHOTOSYNTHETIC = auto()
-    # MEMBRANE = auto()
-    # ROOT = auto()
-    # TEETH = auto()
-    # CHEMICAL_SENSOR = auto()
-    # TOUCH_SENSOR = auto()
-    # CILIA = auto()
-    # PSEUDOPOD = auto()
-    # STORAGE_VACUOLE = auto()
-    # REPRODUCTIVE = auto()
-    # SIGNAL_EMITTER = auto()
-    # PIGMENT = auto()
+    PHOTOSYNTHETIC = auto()
+    ARMOR = auto()
+    SKIN = auto()
 
 
 NUM_CELL_TYPES = len(CellType)
+NUM_ORGANISM_CELL_TYPES = NUM_CELL_TYPES - 2  # exclude NULL and FOOD
 
 @dataclass(frozen=True)
 class CellProps:
@@ -54,13 +42,16 @@ class CellProps:
 
 
 CELL_PROPERTIES: dict[CellType, CellProps] = {
-    CellType.NULL:        CellProps(0, 0,  0, 0,  0, 0,  '#000000', 'Empty'),
-    CellType.SOFT_TISSUE: CellProps(1, 3,  1, 1,  0, 0,  '#e8b4a0', 'Soft Tissue', vision_range=1, can_reproduce=1),
-    CellType.MOUTH:       CellProps(2, 10, 3, 0,  0, 0,  '#cc3333', 'Mouth', vision_range=1, action_rank=4, can_reproduce=1),
-    CellType.FLAGELLA:    CellProps(2, 10, 1, 10, 0, 0,  '#cc88dd', 'Flagella', vision_range=1, can_reproduce=1),
-    CellType.EYE:         CellProps(3, 8,  2, 0,  0, 0,  '#ffffff', 'Eye', vision_range=5, vision_expansion=1, directional=1),
-    CellType.SPIKE:       CellProps(2, 12, 3, 0,  0, 0,  '#ff6600', 'Spike', action_rank=3),
-    CellType.FOOD:        CellProps(0, 10, 5, 0,  0, 10, '#66dd66', 'Food'),
+    CellType.NULL:           CellProps(0,  0,  0, 0,  0, 0,  '#000000', 'Empty'),
+    CellType.SOFT_TISSUE:    CellProps(1,  2,  1, 0,  0, 1,  '#e8b4a0', 'Soft Tissue', vision_range=1, can_reproduce=1),
+    CellType.MOUTH:          CellProps(2,  8,  3, 0,  0, 4,  '#cc3333', 'Mouth', vision_range=1, action_rank=4, can_reproduce=1),
+    CellType.FLAGELLA:       CellProps(3,  8,  1, 10, 0, 4,  '#cc88dd', 'Flagella', vision_range=1, can_reproduce=1),
+    CellType.EYE:            CellProps(2,  6,  2, 0,  0, 3,  '#ffffff', 'Eye', vision_range=5, vision_expansion=1, directional=1),
+    CellType.SPIKE:          CellProps(3, 12,  4, 0,  0, 6,  '#ff6600', 'Spike', action_rank=3),
+    CellType.FOOD:           CellProps(0, 10,  5, 0,  0, 10, '#66dd66', 'Food'),
+    CellType.PHOTOSYNTHETIC: CellProps(1,  5,  2, 0,  2, 3,  '#33aa33', 'Photosynthetic', can_reproduce=1),
+    CellType.ARMOR:          CellProps(1, 15,  6, 0,  0, 0,  '#8888aa', 'Armor'),
+    CellType.SKIN:           CellProps(1,  3,  2, 0,  0, 1,  '#ddbb88', 'Skin', can_reproduce=1),
 }
 
 
@@ -92,11 +83,17 @@ def getCellActions(cell_type: CellType) -> CellActionFunc | None:
     return None
 
 CAN_EAT: dict[CellType, set[CellType]] = {
-    CellType.MOUTH: {CellType.FOOD, CellType.SOFT_TISSUE, CellType.FLAGELLA, CellType.EYE, CellType.MOUTH, CellType.SPIKE},
+    CellType.MOUTH: {
+        CellType.FOOD, CellType.SOFT_TISSUE, CellType.MOUTH, CellType.FLAGELLA,
+        CellType.EYE, CellType.SPIKE, CellType.PHOTOSYNTHETIC, CellType.SKIN,
+    },
 }
 
 CAN_DESTROY: dict[CellType, set[CellType]] = {
-    CellType.SPIKE: {CellType.SOFT_TISSUE, CellType.MOUTH, CellType.FLAGELLA, CellType.EYE, CellType.SPIKE},
+    CellType.SPIKE: {
+        CellType.SOFT_TISSUE, CellType.MOUTH, CellType.FLAGELLA, CellType.EYE,
+        CellType.SPIKE, CellType.PHOTOSYNTHETIC, CellType.ARMOR, CellType.SKIN,
+    },
 }
 
 def mouth_action(state: HexGridState, org_id: OrganismId, genome_id: GenomeId, target_index: GridIndex) -> list[CellActionResult]:

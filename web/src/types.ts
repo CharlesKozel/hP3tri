@@ -76,3 +76,30 @@ export const TERRAIN_TYPE_NAMES: Record<number, string> = {
   [TerrainType.FERTILE]: 'Fertile Soil',
   [TerrainType.TOXIC]: 'Toxic',
 };
+
+export interface EvolutionStatus {
+    running: boolean;
+    generation: number;
+    totalGenerations: number;
+    archiveFillRate: number;
+    bestFitness: number;
+    matchesCompleted: number;
+    log: string[];
+}
+
+export interface ArchiveEntry {
+    binX: number;
+    binY: number;
+    genomeId: number;
+    fitness: number;
+    mobility: number;
+    aggression: number;
+    symmetryMode: number;
+}
+
+export interface HistoryEntry {
+    generation: number;
+    bestFitness: number;
+    avgFitness: number;
+    fillRate: number;
+}

@@ -31,6 +31,8 @@ class OrganismView:
     total_mass: int
     locomotion_power: int
     cells: list[tuple[int, int, int]]  # (q, r, cell_type)
+    grid_width: int = 0
+    grid_height: int = 0
 
 
 def _default_sector_data() -> NDArray[np.float32]:

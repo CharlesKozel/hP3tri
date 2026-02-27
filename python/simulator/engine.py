@@ -1,9 +1,11 @@
+import os
+
 import taichi as ti
 import numpy as np
 from numpy.typing import NDArray
 from simulator.cell_types import CellTypeFields, CellType
 from simulator.sim_types import OrganismId, GenomeId, DEAD
-from interfaces.brain import BrainProvider, BrainOutput
+from interfaces.brain import BrainProvider, BrainOutput, OrganismView
 from interfaces.body_plan import BodyPlanProvider
 from interfaces.sensor import SensorAggregator
 from stubs.stub_brain import StubBrain
@@ -47,7 +49,9 @@ from interfaces.brain import (
 )
 from simulator.cell_types import NUM_CELL_TYPES
 
-ti.init(arch=ti.cpu, default_ip=ti.i32, default_fp=ti.f32)
+_ARCH_MAP = {"cuda": ti.cuda, "cpu": ti.cpu, "metal": ti.metal, "vulkan": ti.vulkan}
+_arch = _ARCH_MAP.get(os.environ.get("TAICHI_ARCH", "cpu").lower(), ti.cpu)
+ti.init(arch=_arch, default_ip=ti.i32, default_fp=ti.f32)
 
 MAX_ORGANISMS = 2**16
 
@@ -78,6 +82,7 @@ class Organism:
 
     locomotion_power: ti.i32
     upkeep_cost: ti.i32
+    energy_generation: ti.i32
 
     movement_priority: ti.u64
     can_move: ti.i8
@@ -108,6 +113,7 @@ class SimulationEngine:
         self.organism_genome_map: dict[OrganismId, GenomeId] = {}
         self.organism_brain_map: dict[OrganismId, BrainProvider] = {}
         self.organism_body_plan_map: dict[OrganismId, BodyPlanProvider] = {}
+        self.genome_registry: dict[GenomeId, dict] = {}
         self.rng = np.random.default_rng(seed)
 
         self.default_brain: BrainProvider = StubBrain()
@@ -151,6 +157,8 @@ class SimulationEngine:
         self.tick_count += 1
 
         self.recompute_aggregates()
+
+        self.apply_resources()
 
         self.step_sensors()
 
@@ -210,6 +218,7 @@ class SimulationEngine:
         self.organisms.total_mass.fill(0)
         self.organisms.locomotion_power.fill(0)
         self.organisms.upkeep_cost.fill(0)
+        self.organisms.energy_generation.fill(0)
         self.organisms.cell_type_counts.fill(0)
 
         self._kernel_recompute_aggregates(
@@ -241,19 +250,22 @@ class SimulationEngine:
                 ti.atomic_add(org[oid].total_mass, ct_mass[ct])
                 ti.atomic_add(org[oid].locomotion_power, ct_locomotion[ct])
                 ti.atomic_add(org[oid].upkeep_cost, ct_maintenance[ct])
+                ti.atomic_add(org[oid].energy_generation, ct_energy_gen[ct])
                 ti.atomic_add(org[oid].cell_type_counts[ct], 1)
 
-    # @ti.kernel
-    # def _kernel_apply_resources(
-    #     self,
-    #     org: ti.template(),
-    #     org_count: ti.i32,
-    # ):
-    #     for i in range(org_count):
-    #         if org[i].alive == 1:
-    #             org[i].energy += org[i].photosynthesis
-    #             org[i].energy -= org[i].upkeep_cost
+    def apply_resources(self) -> None:
+        self._kernel_apply_resources(self.organisms, self.next_org_id)
 
+    @ti.kernel
+    def _kernel_apply_resources(
+        self,
+        org: ti.template(),
+        next_org_id: ti.i32,
+    ):
+        for oid in range(next_org_id):
+            if org[oid].alive == 1:
+                org[oid].energy += org[oid].energy_generation
+                org[oid].energy -= org[oid].upkeep_cost
 
     # ── Step 2: Sensor aggregation ──────────────────────────────
 
@@ -331,28 +343,42 @@ class SimulationEngine:
 
     # ── Step 3: Brain evaluation ────────────────────────────────
 
-    # def step_brains(self, sensor_map: dict[OrganismId, SensorInputs]) -> None:
+    def _build_organism_view(
+        self, org_id: int,
+        ct_np: "NDArray[np.int8]",
+        oid_np: "NDArray[np.int32]",
+    ) -> OrganismView:
+        cells: list[tuple[int, int, int]] = []
+        for idx in range(self.grid_size):
+            if int(oid_np[idx]) == org_id:
+                q = idx % self.width
+                r = idx // self.width
+                cells.append((q, r, int(ct_np[idx])))
+        return OrganismView(
+            organism_id=org_id,
+            age=int(self.organisms[org_id].age),
+            energy=int(self.organisms[org_id].energy),
+            cell_count=int(self.organisms[org_id].cell_count),
+            total_mass=int(self.organisms[org_id].total_mass),
+            locomotion_power=int(self.organisms[org_id].locomotion_power),
+            cells=cells,
+            grid_width=self.width,
+            grid_height=self.height,
+        )
+
     def step_brains(self) -> None:
-        for org_id in range(self.next_org_id):
+        ct_np = self.grid.cell_type.to_numpy()
+        oid_np = self.grid.organism_id.to_numpy()
+        for org_id in range(1, self.next_org_id):
             if self.organisms[org_id].alive == DEAD:
                 continue
 
-            # view = self._build_organism_view(org_id, grid_ct, grid_oid)
-            # sensors = sensor_map.get(org_id, SensorInputs())
-            # outputs = brain_tick(self.organisms[org_id])
-
-            age = self.organisms[org_id].age
-            loop = int((-1 + (1 + 4 * age / 3) ** 0.5) / 2) + 1
-            loop_start = 3 * (loop - 1) * loop
-            pos_in_loop = age - loop_start
-            direction = (pos_in_loop // loop + org_id % 6) % 6
-
-            outputs = BrainOutput(
-                move_direction=direction,
-                wants_grow=self.organisms[org_id].energy > 10,
-                grow_direction=-1,
-                grow_cell_type=int(CellType.SOFT_TISSUE),
-            )
+            brain = self.organism_brain_map.get(org_id, self.default_brain)
+            sensors = self.build_sensor_inputs(org_id)
+            view = self._build_organism_view(org_id, ct_np, oid_np)
+            genome_id = self.organism_genome_map.get(org_id, 0)
+            genome_data = self.genome_registry.get(genome_id, {})
+            outputs = brain.evaluate(view, sensors, genome_data)
 
             self.organisms[org_id].brain_move_dir = outputs.move_direction
             self.organisms[org_id].brain_wants_grow = 1 if outputs.wants_grow else 0

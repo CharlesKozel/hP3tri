@@ -70,17 +70,18 @@ def test_toroidal_wrap():
 
 def test_slow_organism_accumulates_points():
     engine = make_engine()
-    # SOFT_TISSUE: locomotion=1, mass=1 → moves every tick
-    oid = engine.create_organism(4, 4, int(CellType.SOFT_TISSUE), 1000)
+    # FLAGELLA: locomotion=10, mass=1 → moves every tick
+    oid = engine.create_organism(4, 4, int(CellType.FLAGELLA), 1000)
     run_movement(engine, {oid: 0})
     assert cell_pos(engine, oid) == (5, 4)
 
 
 def test_heavy_organism_needs_multiple_ticks():
     engine = make_engine()
-    oid = engine.create_organism(4, 4, int(CellType.SOFT_TISSUE), 1000)
-    # Manually increase mass so locomotion(1) < mass(3), needs 3 ticks to accumulate
+    oid = engine.create_organism(4, 4, int(CellType.FLAGELLA), 1000)
+    # Manually override: set locomotion=1 and mass=3 so 1 < 3, needs 3 ticks to accumulate
     engine.recompute_aggregates()
+    engine.organisms[oid].locomotion_power = 1
     engine.organisms[oid].total_mass = 3
     engine.organisms[oid].brain_move_dir = 0
     engine.claims.fill(0)
@@ -187,10 +188,20 @@ def test_blocked_by_dead_cell():
 
 def test_higher_speed_wins_claim():
     engine = make_engine()
-    # Both target (4, 4): fast from (3, 4) dir 0, slow from (4, 3) dir 5
+    # Both target (4, 4): fast FLAGELLA from (3, 4) dir 0, slow from (4, 3) dir 5
+    # Use MOUTH (no locomotion) for slow, override to give it some locomotion
     fast = engine.create_organism(3, 4, int(CellType.FLAGELLA), 1000)  # speed 10
-    slow = engine.create_organism(4, 3, int(CellType.SOFT_TISSUE), 1000)  # speed 1
-    run_movement(engine, {fast: 0, slow: 5})
+    slow = engine.create_organism(4, 3, int(CellType.FLAGELLA), 1000)
+    engine.recompute_aggregates()
+    # Override slow's locomotion after recompute, then run movement manually
+    engine.organisms[slow].locomotion_power = 1
+    for oid, d in {fast: 0, slow: 5}.items():
+        engine.organisms[oid].brain_move_dir = d
+    engine.claims.fill(0)
+    engine.step_movement(
+        engine.grid, engine.temp_grid, engine.organisms,
+        engine.next_org_id, engine.width, engine.height, engine.grid_size, engine.claims,
+    )
     assert cell_pos(engine, fast) == (4, 4), "faster organism should win the cell"
     assert cell_pos(engine, slow) == (4, 3), "slower organism should stay"
 
@@ -208,8 +219,16 @@ def test_equal_speed_younger_wins():
 def test_loser_retains_movement_points():
     engine = make_engine()
     fast = engine.create_organism(3, 4, int(CellType.FLAGELLA), 1000)
-    slow = engine.create_organism(4, 3, int(CellType.SOFT_TISSUE), 1000)
-    run_movement(engine, {fast: 0, slow: 5})
+    slow = engine.create_organism(4, 3, int(CellType.FLAGELLA), 1000)
+    engine.recompute_aggregates()
+    engine.organisms[slow].locomotion_power = 1
+    for oid, d in {fast: 0, slow: 5}.items():
+        engine.organisms[oid].brain_move_dir = d
+    engine.claims.fill(0)
+    engine.step_movement(
+        engine.grid, engine.temp_grid, engine.organisms,
+        engine.next_org_id, engine.width, engine.height, engine.grid_size, engine.claims,
+    )
     # slow lost the claim — should still have its movement_points
     assert engine.organisms[slow].movement_points > 0
     # slow's energy should NOT have been deducted
