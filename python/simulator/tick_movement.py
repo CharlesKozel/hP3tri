@@ -26,17 +26,17 @@ def compute_movers_and_priorities(
     TOP_SCALE = ti.cast(1_000_000_000, ti.i64)
     MAX_ORG_CELLS = ti.cast(1_000_000, ti.i64)
 
-    organisms[oid].can_move = 1 # assume it can move
+    organisms[oid].can_move = ti.cast(1, ti.i8)  # assume it can move
 
     if organisms[oid].alive == DEAD:
-        organisms[oid].can_move = 0
-    if organisms[oid].brain_move_dir < 0: # no movement desired
-        organisms[oid].can_move = 0
+        organisms[oid].can_move = ti.cast(0, ti.i8)
+    if organisms[oid].brain_move_dir < 0:  # no movement desired
+        organisms[oid].can_move = ti.cast(0, ti.i8)
     if organisms[oid].movement_points < organisms[oid].total_mass:
-        organisms[oid].can_move = 0
+        organisms[oid].can_move = ti.cast(0, ti.i8)
 
     if organisms[oid].energy < get_movement_energy_cost(organisms[oid]):
-        organisms[oid].can_move = 0
+        organisms[oid].can_move = ti.cast(0, ti.i8)
 
 
     # CALCULATE MOVEMENT PRIORITY
@@ -92,7 +92,7 @@ def write_claims(
             # occupied cell for simplicity
             dest_oid = grid[dest].organism_id
             if grid[dest].cell_type != 0 and dest_oid != oid:
-                organisms[oid].can_move = 0
+                organisms[oid].can_move = ti.cast(0, ti.i8)
             else:
                 ti.atomic_max(claims[dest], organisms[oid].movement_priority)
 
@@ -122,7 +122,7 @@ def invalidate_conflicting_claims(
         dest_oid = grid[dest].organism_id
         if dest_oid != oid: # TODO: is this check redundant? priority is unique per organism
             if claims[dest] != organisms[oid].movement_priority:
-                organisms[oid].can_move = 0
+                organisms[oid].can_move = ti.cast(0, ti.i8)
 
 
 # ------------------------------------------------------------------------
@@ -151,8 +151,8 @@ def clear_mover_source_cells(
     oid = grid[idx].organism_id
     if oid > 0 and organisms[oid].can_move == 1:
         temp_grid[idx].organism_id = 0
-        temp_grid[idx].cell_type = 0
-        temp_grid[idx].direction = 0
+        temp_grid[idx].cell_type = ti.cast(0, ti.i8)
+        temp_grid[idx].direction = ti.cast(0, ti.i8)
 
 
 # ------------------------------------------------------------------------

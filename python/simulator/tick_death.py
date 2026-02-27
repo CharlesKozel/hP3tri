@@ -78,4 +78,4 @@ def remove_disconnected_cells(idx, grid, organisms, labels, best_component):
 
 @ti.func
 def clear_connectivity_flags(oid, organisms):
-    organisms[oid].needs_connectivity_check = 0
+    organisms[oid].needs_connectivity_check = ti.cast(0, ti.i8)

@@ -35,11 +35,17 @@ from simulator.tick_actions import (
     init_action_state,
     write_action_claims,
     execute_action_claims,
+    compact_reproduce_buffer,
 )
 from simulator.tick_sensors import (
     init_sensor_organism,
     cell_vision,
     SENSOR_NOTHING,
+)
+from simulator.tick_brain import (
+    evaluate_brain_gpu,
+    find_reproduce_cell,
+    NUM_BRAIN_PARAMS,
 )
 from interfaces.brain import (
     SensorInputs,
@@ -48,6 +54,9 @@ from interfaces.brain import (
     CH_OPEN_SPACE,
 )
 from simulator.cell_types import NUM_CELL_TYPES
+
+# Maximum number of unique genomes for brain params storage
+MAX_GENOMES: int = 1024
 
 _ARCH_MAP = {"cuda": ti.cuda, "cpu": ti.cpu, "metal": ti.metal, "vulkan": ti.vulkan}
 _arch = _ARCH_MAP.get(os.environ.get("TAICHI_ARCH", "cpu").lower(), ti.cpu)
@@ -138,18 +147,62 @@ class SimulationEngine:
         self.action_claims = ti.field(dtype=ti.i64, shape=self.grid_size)
         self.reproduce_buffer = ti.field(dtype=ti.i32, shape=self.grid_size)
 
+        # Sparse reproduce buffer for efficient GPU->CPU transfer
+        # Only transfer actual reproductions (typically few per tick) instead of entire grid
+        max_reproduce_per_tick = min(MAX_ORGANISMS // 2, 4096)
+        self.reproduce_idx_buffer = ti.field(dtype=ti.i32, shape=max_reproduce_per_tick)
+        self.reproduce_oid_buffer = ti.field(dtype=ti.i32, shape=max_reproduce_per_tick)
+        self.reproduce_count = ti.field(dtype=ti.i32, shape=())
+        self.max_reproduce_per_tick = max_reproduce_per_tick
+
         # Connectivity fields
         self.labels = ti.field(dtype=ti.i32, shape=self.grid_size)
         self.connectivity_changed = ti.field(dtype=ti.i32, shape=())
+        self.any_connectivity_needed = ti.field(dtype=ti.i32, shape=())
         self.component_size = ti.field(dtype=ti.i32, shape=self.grid_size)
         self.best_component = ti.field(dtype=ti.i64, shape=MAX_ORGANISMS)
 
         # Sensor fields
         self.sensor_distances = ti.field(dtype=ti.i32, shape=(MAX_ORGANISMS, NUM_SECTORS, NUM_CHANNELS))
 
+        # Brain parameters field (per-genome)
+        # Stores rule-based brain params on GPU for all genomes
+        self.brain_params = ti.field(dtype=ti.f32, shape=(MAX_GENOMES, NUM_BRAIN_PARAMS))
+        self._init_default_brain_params()
+
+        # GPU brain mode flag
+        self.use_gpu_brain = True
+
         # Cell type property lookup tables
         self.ct_fields = CellTypeFields()
         self.ct_fields.load()
+
+    def _init_default_brain_params(self) -> None:
+        """Initialize default brain parameters for genome 0."""
+        defaults = np.zeros(NUM_BRAIN_PARAMS, dtype=np.float32)
+        defaults[0] = 0.3   # P_FLEE_THRESHOLD
+        defaults[1] = 0.2   # P_THREAT_DIST_THRESHOLD
+        defaults[2] = 0.3   # P_HUNGER_THRESHOLD
+        defaults[3] = 0.8   # P_FOOD_SEEK_RANGE
+        defaults[4] = 0.5   # P_REPRODUCE_THRESHOLD
+        defaults[5] = 0.1   # P_MIN_REPRODUCE_AGE
+        defaults[6] = 0.15  # P_GROWTH_THRESHOLD
+        defaults[7] = 0.3   # P_OFFSPRING_ENERGY
+        defaults[8:14] = 1.0 / 6.0   # P_WANDER_SECTOR weights
+        defaults[14:22] = 1.0 / 8.0  # P_CELL_TYPE weights
+        defaults[22] = 0.3  # P_REPRODUCE_ENERGY_FRAC
+        defaults[23] = 0.5  # P_GROW_TOWARD_FOOD
+        defaults[24] = 0.5  # P_FLEE_SPEED
+        defaults[25] = 0.3  # P_AGGRESSION
+        # Set for all genomes as default
+        for g in range(MAX_GENOMES):
+            for i in range(NUM_BRAIN_PARAMS):
+                self.brain_params[g, i] = float(defaults[i])
+
+    def set_genome_brain_params(self, genome_id: int, params: np.ndarray) -> None:
+        """Set brain parameters for a specific genome."""
+        for i in range(min(len(params), NUM_BRAIN_PARAMS)):
+            self.brain_params[genome_id, i] = float(params[i])
 
     # ── Full tick ───────────────────────────────────────────────
     def step(self) -> None:
@@ -214,13 +267,7 @@ class SimulationEngine:
     # ── Step 0: Recompute aggregates ────────────────────────────
 
     def recompute_aggregates(self) -> None:
-        self.organisms.cell_count.fill(0)
-        self.organisms.total_mass.fill(0)
-        self.organisms.locomotion_power.fill(0)
-        self.organisms.upkeep_cost.fill(0)
-        self.organisms.energy_generation.fill(0)
-        self.organisms.cell_type_counts.fill(0)
-
+        # Clear and recompute in a single fused kernel for efficiency
         self._kernel_recompute_aggregates(
             self.grid,
             self.ct_fields.mass,
@@ -228,6 +275,7 @@ class SimulationEngine:
             self.ct_fields.locomotion_power,
             self.ct_fields.energy_generation,
             self.organisms,
+            self.next_org_id,
             self.grid_size,
         )
 
@@ -240,8 +288,19 @@ class SimulationEngine:
         ct_locomotion: ti.template(),
         ct_energy_gen: ti.template(),
         org: ti.template(),
+        next_org_id: ti.i32,
         grid_size: ti.i32,
     ):
+        # First clear aggregates (fused for efficiency - avoids fill() overhead)
+        for oid in range(next_org_id):
+            org[oid].cell_count = 0
+            org[oid].total_mass = 0
+            org[oid].locomotion_power = 0
+            org[oid].upkeep_cost = 0
+            org[oid].energy_generation = 0
+            for ct_idx in ti.static(range(NUM_CELL_TYPES)):
+                org[oid].cell_type_counts[ct_idx] = 0
+        # Then accumulate from grid
         for idx in range(grid_size):
             oid = grid[idx].organism_id
             if oid > 0:
@@ -367,6 +426,75 @@ class SimulationEngine:
         )
 
     def step_brains(self) -> None:
+        """Evaluate brains for all organisms - GPU or CPU path."""
+        if self.use_gpu_brain:
+            self._step_brains_gpu()
+        else:
+            self._step_brains_cpu()
+
+    def _step_brains_gpu(self) -> None:
+        """GPU-accelerated brain evaluation using Taichi kernel."""
+        max_range = max(self.width, self.height) // 2
+        self._kernel_brain_eval(
+            self.organisms,
+            self.sensor_distances,
+            self.brain_params,
+            self.ct_fields.can_reproduce,
+            self.grid,
+            max_range,
+            self.width,
+            self.height,
+            self.grid_size,
+            self.next_org_id,
+        )
+        # Handle reproduce cell finding for organisms that requested it
+        self._kernel_find_reproduce_cells(
+            self.organisms,
+            self.grid,
+            self.ct_fields.can_reproduce,
+            self.grid_size,
+            self.width,
+            self.next_org_id,
+        )
+
+    @ti.kernel
+    def _kernel_brain_eval(
+        self,
+        organisms: ti.template(),
+        sensor_distances: ti.template(),
+        brain_params: ti.template(),
+        ct_can_reproduce: ti.template(),
+        grid: ti.template(),
+        max_range: ti.i32,
+        width: ti.i32,
+        height: ti.i32,
+        grid_size: ti.i32,
+        next_org_id: ti.i32,
+    ):
+        for oid in range(next_org_id):
+            evaluate_brain_gpu(
+                oid, organisms, sensor_distances, brain_params,
+                ct_can_reproduce, grid, max_range, width, height
+            )
+
+    @ti.kernel
+    def _kernel_find_reproduce_cells(
+        self,
+        organisms: ti.template(),
+        grid: ti.template(),
+        ct_can_reproduce: ti.template(),
+        grid_size: ti.i32,
+        width: ti.i32,
+        next_org_id: ti.i32,
+    ):
+        """Find reproduce cells for organisms that requested reproduction."""
+        for oid in range(next_org_id):
+            if organisms[oid].brain_reproduce_cell_idx == -2:  # Signal to find
+                result = find_reproduce_cell(oid, organisms, grid, ct_can_reproduce, grid_size, width)
+                organisms[oid].brain_reproduce_cell_idx = result
+
+    def _step_brains_cpu(self) -> None:
+        """Original CPU-based brain evaluation (fallback)."""
         ct_np = self.grid.cell_type.to_numpy()
         oid_np = self.grid.organism_id.to_numpy()
         for org_id in range(1, self.next_org_id):
@@ -392,7 +520,7 @@ class SimulationEngine:
     # ── Step 4: Movement kernels ──────────────────────────────────
 
     def process_movement(self):
-        self.claims.fill(0)
+        # Note: claims.fill(0) moved into kernel for efficiency
         self.step_movement(
             self.grid,
             self.temp_grid,
@@ -416,6 +544,9 @@ class SimulationEngine:
             grid_size: ti.i32,
             claims: ti.template(),
     ):
+        # Clear claims in kernel (avoids fill() overhead)
+        for idx in range(grid_size):
+            claims[idx] = 0
         for oid in range(next_org_id):
             compute_movers_and_priorities(oid, organisms)
         for idx in range(grid_size):
@@ -436,8 +567,10 @@ class SimulationEngine:
     # ── Step 5+6: Unified Action Resolution (eat + growth) ─────
 
     def step_actions(self) -> None:
-        self.action_claims.fill(0)
-        self.reproduce_buffer.fill(0)
+        # Reset reproduce counter
+        self.reproduce_count[None] = 0
+
+        # Note: fill operations moved into kernel for efficiency
         self._kernel_step_actions(
             self.grid,
             self.organisms,
@@ -449,6 +582,10 @@ class SimulationEngine:
             self.ct_fields.growth_cost,
             self.action_claims,
             self.reproduce_buffer,
+            self.reproduce_idx_buffer,
+            self.reproduce_oid_buffer,
+            self.reproduce_count,
+            self.max_reproduce_per_tick,
             self.next_org_id,
             self.width,
             self.height,
@@ -468,36 +605,55 @@ class SimulationEngine:
         ct_growth_cost: ti.template(),
         action_claims: ti.template(),
         reproduce_buffer: ti.template(),
+        reproduce_idx_buffer: ti.template(),
+        reproduce_oid_buffer: ti.template(),
+        reproduce_count: ti.template(),
+        max_reproduce: ti.i32,
         next_org_id: ti.i32,
         width: ti.i32,
         height: ti.i32,
     ):
         grid_size = width * height
+        # Clear buffers and init action state in first pass (fused for efficiency)
+        for idx in range(grid_size):
+            action_claims[idx] = 0
+            reproduce_buffer[idx] = 0
         for oid in range(next_org_id):
             init_action_state(oid, organisms)
         for idx in range(grid_size):
             write_action_claims(idx, grid, organisms, ct_action_rank, ct_can_eat, ct_can_destroy, ct_can_reproduce, ct_growth_cost, action_claims, width, height)
         for idx in range(grid_size):
             execute_action_claims(idx, grid, organisms, ct_consumption_value, ct_growth_cost, action_claims, reproduce_buffer)
+        # Compact sparse reproduce buffer for efficient GPU->CPU transfer
+        for idx in range(grid_size):
+            compact_reproduce_buffer(idx, reproduce_buffer, reproduce_idx_buffer, reproduce_oid_buffer, reproduce_count, max_reproduce)
 
     def _process_reproduce_buffer(self) -> None:
-        buf = self.reproduce_buffer.to_numpy()
-        for idx in range(self.grid_size):
-            parent_oid = int(buf[idx])
-            if parent_oid > 0:
-                q = idx % self.width
-                r = idx // self.width
-                parent_genome = self.organism_genome_map[parent_oid]
-                seed_ct = int(self.organisms[parent_oid].brain_reproduce_cell_type)
-                energy = int(self.organisms[parent_oid].brain_reproduce_energy)
-                brain = self.organism_brain_map.get(parent_oid)
-                body_plan = self.organism_body_plan_map.get(parent_oid)
-                self.create_organism(
-                    q, r, seed_ct, energy,
-                    genome_id=parent_genome,
-                    brain=brain,
-                    body_plan=body_plan,
-                )
+        # Use sparse buffer for efficient transfer (only transfer actual reproductions)
+        count = int(self.reproduce_count[None])
+        if count == 0:
+            return  # Early exit if no reproductions
+
+        # Only transfer the small sparse buffers (up to count entries)
+        idx_buf = self.reproduce_idx_buffer.to_numpy()[:count]
+        oid_buf = self.reproduce_oid_buffer.to_numpy()[:count]
+
+        for i in range(count):
+            idx = int(idx_buf[i])
+            parent_oid = int(oid_buf[i])
+            q = int(idx % self.width)
+            r = int(idx // self.width)
+            parent_genome = self.organism_genome_map[parent_oid]
+            seed_ct = int(self.organisms[parent_oid].brain_reproduce_cell_type)
+            energy = int(self.organisms[parent_oid].brain_reproduce_energy)
+            brain = self.organism_brain_map.get(parent_oid)
+            body_plan = self.organism_body_plan_map.get(parent_oid)
+            self.create_organism(
+                q, r, seed_ct, energy,
+                genome_id=parent_genome,
+                brain=brain,
+                body_plan=body_plan,
+            )
 
     # ── Step 7: Death and cleanup ───────────────────────────────
 
@@ -508,6 +664,12 @@ class SimulationEngine:
             self.next_org_id,
             self.grid_size,
         )
+
+        # Check if ANY organism needs connectivity check (early exit optimization)
+        self.any_connectivity_needed[None] = 0
+        self._check_any_connectivity_needed(self.organisms, self.next_org_id, self.any_connectivity_needed)
+        if self.any_connectivity_needed[None] == 0:
+            return  # No connectivity work needed - huge speedup!
 
         self._connectivity_init(
             self.grid, self.organisms, self.labels, self.grid_size,
@@ -529,6 +691,17 @@ class SimulationEngine:
         )
 
     @ti.kernel
+    def _check_any_connectivity_needed(
+        self,
+        organisms: ti.template(),
+        next_org_id: ti.i32,
+        any_needed: ti.template(),
+    ):
+        for oid in range(next_org_id):
+            if organisms[oid].needs_connectivity_check == 1:
+                any_needed[None] = 1
+
+    @ti.kernel
     def _kernel_step_death(
         self,
         grid: ti.template(),
@@ -540,9 +713,8 @@ class SimulationEngine:
             mark_organism_death(oid, organisms)
         for idx in range(grid_size):
             clear_dead_cells(idx, grid, organisms)
-        for oid in range(next_org_id):
-            if organisms[oid].alive == 1:
-                organisms[oid].needs_connectivity_check = ti.cast(1, ti.i8)
+        # NOTE: needs_connectivity_check is already set by tick_actions when cells are destroyed
+        # Don't blindly set it for ALL organisms - that's wasteful!
 
     @ti.kernel
     def _connectivity_init(

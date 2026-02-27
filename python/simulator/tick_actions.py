@@ -185,3 +185,21 @@ def execute_action_claims(
                     ti.atomic_sub(organisms[actor_oid].energy, cost)
                     grid[idx].cell_type = ti.cast(grow_type, ti.i8)
                     grid[idx].organism_id = actor_oid
+
+
+@ti.func
+def compact_reproduce_buffer(
+    idx: ti.i32,
+    reproduce_buffer: ti.template(),
+    reproduce_idx_buffer: ti.template(),
+    reproduce_oid_buffer: ti.template(),
+    reproduce_count: ti.template(),
+    max_reproduce: ti.i32,
+):
+    """Compact non-zero entries into sparse buffer for efficient transfer."""
+    oid = reproduce_buffer[idx]
+    if oid > 0:
+        slot = ti.atomic_add(reproduce_count[None], 1)
+        if slot < max_reproduce:
+            reproduce_idx_buffer[slot] = idx
+            reproduce_oid_buffer[slot] = oid
