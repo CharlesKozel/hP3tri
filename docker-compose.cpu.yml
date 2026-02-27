@@ -1,0 +1,8 @@
+services:
+  hp3tri:
+    environment:
+      - TAICHI_ARCH=cpu
+    deploy:
+      resources:
+        reservations:
+          devices: []

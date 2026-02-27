@@ -1,0 +1,14 @@
+.venv/
+.gradle/
+.idea/
+.git/
+data/
+__pycache__/
+*.pyc
+
+kotlin/build/
+web/node_modules/
+web/dist/
+
+*.iml
+.DS_Store
