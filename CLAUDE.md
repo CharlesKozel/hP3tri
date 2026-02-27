@@ -28,6 +28,9 @@ This project is a **2D artificial life evolution simulator** where genetically d
   - When python dictionary / set types are ambiguous, like dict[int,int] use TypeAlias
 ### Coding Standards:
 - Always use 4 spaces for indentation.
+- Important!: For function names that can not be easily described by their name, add a one to two line comment. Not
+  all functions should have this, at most 50%, so be selective. Us this when description from name and actual 
+  implementation are abstract enough to justify a 1 or 2 line comment. 
 
 #### **Python**:
  - ALWAYS include type hints and type annotations were possible. (Except in Taichi kernels, where it breaks compilation)

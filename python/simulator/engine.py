@@ -29,6 +29,23 @@ from simulator.tick_death import (
     remove_disconnected_cells,
     clear_connectivity_flags,
 )
+from simulator.tick_actions import (
+    init_action_state,
+    write_action_claims,
+    execute_action_claims,
+)
+from simulator.tick_sensors import (
+    init_sensor_organism,
+    cell_vision,
+    SENSOR_NOTHING,
+)
+from interfaces.brain import (
+    SensorInputs,
+    NUM_SECTORS,
+    NUM_CHANNELS,
+    CH_OPEN_SPACE,
+)
+from simulator.cell_types import NUM_CELL_TYPES
 
 ti.init(arch=ti.cpu, default_ip=ti.i32, default_fp=ti.f32)
 
@@ -45,6 +62,7 @@ class GridCell:
     cell_type: ti.i8
     organism_id: ti.i32
     terrain_type: ti.i8
+    direction: ti.i8
 
 # TODO check sizes of these, most are larger than necessary, or signed when unsigned would work
 @ti.dataclass
@@ -65,8 +83,16 @@ class Organism:
     can_move: ti.i8
     brain_move_dir: ti.i32
     brain_wants_grow: ti.i32
-    brain_wants_reproduce: ti.i32
+    brain_grow_direction: ti.i32
+    brain_grow_cell_type: ti.i32
+    brain_reproduce_cell_idx: ti.i32
+    brain_reproduce_direction: ti.i32
+    brain_reproduce_energy: ti.i32
+    brain_reproduce_cell_type: ti.i32
+    growth_cells_placed: ti.i32
+    reproduce_cells_placed: ti.i32
     needs_connectivity_check: ti.i8
+    cell_type_counts: ti.types.vector(NUM_CELL_TYPES, ti.i32)
 
 
 @ti.data_oriented
@@ -103,7 +129,8 @@ class SimulationEngine:
         self.temp_cell_type = ti.field(dtype=ti.i8, shape=self.grid_size)
         self.temp_organism_id = ti.field(dtype=ti.i32, shape=self.grid_size)
 
-        self.grow_claim_combined = ti.field(dtype=ti.i64, shape=self.grid_size)
+        self.action_claims = ti.field(dtype=ti.i64, shape=self.grid_size)
+        self.reproduce_buffer = ti.field(dtype=ti.i32, shape=self.grid_size)
 
         # Connectivity fields
         self.labels = ti.field(dtype=ti.i32, shape=self.grid_size)
@@ -111,27 +138,31 @@ class SimulationEngine:
         self.component_size = ti.field(dtype=ti.i32, shape=self.grid_size)
         self.best_component = ti.field(dtype=ti.i64, shape=MAX_ORGANISMS)
 
+        # Sensor fields
+        self.sensor_distances = ti.field(dtype=ti.i32, shape=(MAX_ORGANISMS, NUM_SECTORS, NUM_CHANNELS))
+
         # Cell type property lookup tables
         self.ct_fields = CellTypeFields()
         self.ct_fields.load()
 
     # ── Full tick ───────────────────────────────────────────────
     def step(self) -> None:
+        # Tick 0 is initial conditions, no actions / brain eval
         self.tick_count += 1
 
         self.recompute_aggregates()
-        # self.step_resources() # TODO implement photosynthesis etc.
-        # sensor_map = self.step_sensors() # removing for minimal sim test
-        self.step_brains() # TODO read sensors for brains
+
+        self.step_sensors()
+
+        self.step_brains()
 
         self.process_movement()
 
-        # self.step_growth() # removing for minimal sim test
-        # self.step_actions() # removing for minimal sim test
+        self.step_actions()
 
         self.process_death_and_disconnection()
 
-        self._increment_ages()
+        self.increment_ages()
 
     def create_organism(
         self,
@@ -142,8 +173,8 @@ class SimulationEngine:
         genome_id: GenomeId = 0,
         brain: BrainProvider | None = None,
         body_plan: BodyPlanProvider | None = None,
+        seed_direction: int = 0,
     ) -> OrganismId:
-        # org_id = ti.atomic_add(self.next_org_id, 1)
         org_id = self.next_org_id
         self.next_org_id += 1
 
@@ -156,6 +187,7 @@ class SimulationEngine:
         grid_idx = seed_r * self.width + seed_q
         self.grid[grid_idx].cell_type = seed_cell_type
         self.grid[grid_idx].organism_id = org_id
+        self.grid[grid_idx].direction = seed_direction
 
         self.organism_genome_map[org_id] = genome_id
         if brain is not None:
@@ -165,16 +197,11 @@ class SimulationEngine:
 
         return org_id
 
-    # def place_cell(self, org_id: OrganismId, q: int, r: int, cell_type: int) -> None:
-    #     grid_idx = r * self.width + q
-    #     self.grid[grid_idx].cell_type = cell_type
-    #     self.grid[grid_idx].organism_id = org_id
-    #
-    # def get_brain(self, org_id: OrganismId) -> BrainProvider:
-    #     return self.organism_brain_map.get(org_id, self.default_brain)
-    #
-    # def get_body_plan(self, org_id: OrganismId) -> BodyPlanProvider:
-    #     return self.organism_body_plan_map.get(org_id, self.default_body_plan)
+    def place_cell(self, org_id: OrganismId, q: int, r: int, cell_type: int, direction: int = 0) -> None:
+        grid_idx = r * self.width + q
+        self.grid[grid_idx].cell_type = cell_type
+        self.grid[grid_idx].organism_id = org_id
+        self.grid[grid_idx].direction = direction
 
     # ── Step 0: Recompute aggregates ────────────────────────────
 
@@ -183,6 +210,7 @@ class SimulationEngine:
         self.organisms.total_mass.fill(0)
         self.organisms.locomotion_power.fill(0)
         self.organisms.upkeep_cost.fill(0)
+        self.organisms.cell_type_counts.fill(0)
 
         self._kernel_recompute_aggregates(
             self.grid,
@@ -213,6 +241,7 @@ class SimulationEngine:
                 ti.atomic_add(org[oid].total_mass, ct_mass[ct])
                 ti.atomic_add(org[oid].locomotion_power, ct_locomotion[ct])
                 ti.atomic_add(org[oid].upkeep_cost, ct_maintenance[ct])
+                ti.atomic_add(org[oid].cell_type_counts[ct], 1)
 
     # @ti.kernel
     # def _kernel_apply_resources(
@@ -228,21 +257,77 @@ class SimulationEngine:
 
     # ── Step 2: Sensor aggregation ──────────────────────────────
 
-    # def step_sensors(self) -> dict[OrganismId, SensorInputs]:
-    #     grid_ct = self.grid.cell_type.to_numpy()
-    #     grid_oid = self.grid.organism_id.to_numpy()
-    #
-    #     results: dict[OrganismId, SensorInputs] = {}
-    #     for org_idx in range(self.next_org_id):
-    #         if self.organisms[org_idx].alive != 1:
-    #             continue
-    #         org_id = org_idx + 1
-    #         view = self._build_organism_view(org_idx, grid_ct, grid_oid)
-    #         sensor = self.default_sensor
-    #         results[org_id] = sensor.aggregate(
-    #             view, grid_ct, grid_oid, self.width, self.height,
-    #         )
-    #     return results
+    def step_sensors(self) -> None:
+        self._sensor_init(
+            self.sensor_distances,
+            self.next_org_id,
+        )
+        self._sensor_scan(
+            self.grid, self.organisms,
+            self.ct_fields.vision_range,
+            self.ct_fields.vision_expansion,
+            self.ct_fields.directional,
+            self.ct_fields.can_eat,
+            self.ct_fields.can_destroy,
+            self.sensor_distances,
+            self.width, self.height, self.grid_size,
+        )
+
+    @ti.kernel
+    def _sensor_init(
+        self,
+        sensor_distances: ti.template(),
+        next_org_id: ti.i32,
+    ):
+        for oid in range(next_org_id):
+            init_sensor_organism(oid, sensor_distances)
+
+    @ti.kernel
+    def _sensor_scan(
+        self,
+        grid: ti.template(),
+        organisms: ti.template(),
+        ct_vision_range: ti.template(),
+        ct_vision_expansion: ti.template(),
+        ct_directional: ti.template(),
+        can_eat: ti.template(),
+        can_destroy: ti.template(),
+        sensor_distances: ti.template(),
+        width: ti.i32,
+        height: ti.i32,
+        grid_size: ti.i32,
+    ):
+        for idx in range(grid_size):
+            oid = grid[idx].organism_id
+            if oid > 0 and organisms[oid].alive == 1:
+                cell_vision(idx, grid, organisms,
+                            ct_vision_range, ct_vision_expansion, ct_directional,
+                            can_eat, can_destroy, sensor_distances, width, height)
+
+    def build_sensor_inputs(self, org_id: int) -> SensorInputs:
+        raw = np.zeros((NUM_SECTORS, NUM_CHANNELS), dtype=np.float32)
+        max_range = max(self.width, self.height) // 2
+        for s in range(NUM_SECTORS):
+            for c in range(NUM_CHANNELS):
+                val = int(self.sensor_distances[org_id, s, c])
+                if c == CH_OPEN_SPACE:
+                    raw[s, c] = float(min(val, 1))
+                elif val >= SENSOR_NOTHING:
+                    raw[s, c] = 1.0
+                else:
+                    raw[s, c] = val / max_range if max_range > 0 else 1.0
+        cell_counts = np.array(
+            [int(self.organisms[org_id].cell_type_counts[ct]) for ct in range(NUM_CELL_TYPES)],
+            dtype=np.int32,
+        )
+        energy = int(self.organisms[org_id].energy)
+        age = int(self.organisms[org_id].age)
+        return SensorInputs(
+            sector_data=raw,
+            own_energy=energy / 1000.0,
+            own_age=age / 1000.0,
+            own_cell_counts=cell_counts,
+        )
 
     # ── Step 3: Brain evaluation ────────────────────────────────
 
@@ -264,9 +349,18 @@ class SimulationEngine:
 
             outputs = BrainOutput(
                 move_direction=direction,
+                wants_grow=self.organisms[org_id].energy > 10,
+                grow_direction=-1,
+                grow_cell_type=int(CellType.SOFT_TISSUE),
             )
 
             self.organisms[org_id].brain_move_dir = outputs.move_direction
+            self.organisms[org_id].brain_wants_grow = 1 if outputs.wants_grow else 0
+            self.organisms[org_id].brain_grow_direction = outputs.grow_direction
+            self.organisms[org_id].brain_grow_cell_type = outputs.grow_cell_type
+            self.organisms[org_id].brain_reproduce_cell_idx = outputs.reproduce_cell_idx
+            self.organisms[org_id].brain_reproduce_direction = outputs.reproduce_direction
+            self.organisms[org_id].brain_reproduce_energy = outputs.reproduce_energy
 
 
     # ── Step 4: Movement kernels ──────────────────────────────────
@@ -313,81 +407,71 @@ class SimulationEngine:
         for oid in range(next_org_id):
             deduct_movement_costs(oid, organisms)
 
-    # ── Step 5: Growth ──────────────────────────────────────────
+    # ── Step 5+6: Unified Action Resolution (eat + growth) ─────
 
-    # def step_growth(self) -> None:
-    #     from simulator.tick_growth import execute_growth
-    #     execute_growth(self)
+    def step_actions(self) -> None:
+        self.action_claims.fill(0)
+        self.reproduce_buffer.fill(0)
+        self._kernel_step_actions(
+            self.grid,
+            self.organisms,
+            self.ct_fields.action_rank,
+            self.ct_fields.can_eat,
+            self.ct_fields.can_destroy,
+            self.ct_fields.can_reproduce,
+            self.ct_fields.consumption_value,
+            self.ct_fields.growth_cost,
+            self.action_claims,
+            self.reproduce_buffer,
+            self.next_org_id,
+            self.width,
+            self.height,
+        )
+        self._process_reproduce_buffer()
 
-    # ── Step 6: Action resolution ───────────────────────────────
-    #
-    # @ti.kernel
-    # def _kernel_resolve_actions(
-    #     self,
-    #     grid: ti.template(),
-    #     org: ti.template(),
-    #     ct_consumption_value: ti.template(),
-    #     width: ti.i32,
-    #     height: ti.i32,
-    #     grid_size: ti.i32,
-    # ):
-    #     MOUTH = ti.cast(CellType.MOUTH, ti.i32)
-    #     TEETH = ti.cast(CellType.TEETH, ti.i32)
-    #     SPIKE = ti.cast(CellType.SPIKE, ti.i32)
-    #
-    #     for idx in range(grid_size):
-    #         ct = ti.cast(grid[idx].cell_type, ti.i32)
-    #         oid = grid[idx].organism_id
-    #         if oid <= 0:
-    #             continue
-    #         arr_idx = oid - 1
-    #         if org[arr_idx].alive == 0:
-    #             continue
-    #
-    #         q = idx % width
-    #         r = idx // width
-    #
-    #         if ct == MOUTH or ct == TEETH:
-    #             ate = 0
-    #             for d in ti.static(range(6)):
-    #                 if ate == 0:
-    #                     nq = (q + NEIGHBOR_OFFSETS[d][0]) % width
-    #                     nr = (r + NEIGHBOR_OFFSETS[d][1]) % height
-    #                     nidx = nr * width + nq
-    #                     neighbor_ct = ti.cast(grid[nidx].cell_type, ti.i32)
-    #                     neighbor_oid = grid[nidx].organism_id
-    #
-    #                     if neighbor_ct != 0:
-    #                         can_eat = False
-    #                         if neighbor_oid == 0:
-    #                             can_eat = True
-    #                         elif neighbor_oid != oid:
-    #                             if org[neighbor_oid - 1].genome_id != org[arr_idx].genome_id:
-    #                                 can_eat = True
-    #
-    #                         if can_eat:
-    #                             energy_gained = ct_consumption_value[neighbor_ct]
-    #                             ti.atomic_add(org[arr_idx].energy, energy_gained)
-    #                             grid[nidx].cell_type = ti.cast(0, ti.i8)
-    #                             grid[nidx].organism_id = 0
-    #                             ate = 1
-    #
-    #         if ct == SPIKE:
-    #             for d in ti.static(range(6)):
-    #                 nq = (q + NEIGHBOR_OFFSETS[d][0]) % width
-    #                 nr = (r + NEIGHBOR_OFFSETS[d][1]) % height
-    #                 nidx = nr * width + nq
-    #                 neighbor_oid = grid[nidx].organism_id
-    #                 neighbor_ct = ti.cast(grid[nidx].cell_type, ti.i32)
-    #
-    #                 if neighbor_ct != 0 and neighbor_oid > 0 and neighbor_oid != oid:
-    #                     if org[neighbor_oid - 1].genome_id != org[arr_idx].genome_id:
-    #                         grid[nidx].cell_type = ti.cast(0, ti.i8)
-    #                         grid[nidx].organism_id = 0
-    #
-    # def step_actions(self) -> None:
-    #     from simulator.tick_actions import execute_actions
-    #     execute_actions(self)
+    @ti.kernel
+    def _kernel_step_actions(
+        self,
+        grid: ti.template(),
+        organisms: ti.template(),
+        ct_action_rank: ti.template(),
+        ct_can_eat: ti.template(),
+        ct_can_destroy: ti.template(),
+        ct_can_reproduce: ti.template(),
+        ct_consumption_value: ti.template(),
+        ct_growth_cost: ti.template(),
+        action_claims: ti.template(),
+        reproduce_buffer: ti.template(),
+        next_org_id: ti.i32,
+        width: ti.i32,
+        height: ti.i32,
+    ):
+        grid_size = width * height
+        for oid in range(next_org_id):
+            init_action_state(oid, organisms)
+        for idx in range(grid_size):
+            write_action_claims(idx, grid, organisms, ct_action_rank, ct_can_eat, ct_can_destroy, ct_can_reproduce, ct_growth_cost, action_claims, width, height)
+        for idx in range(grid_size):
+            execute_action_claims(idx, grid, organisms, ct_consumption_value, ct_growth_cost, action_claims, reproduce_buffer)
+
+    def _process_reproduce_buffer(self) -> None:
+        buf = self.reproduce_buffer.to_numpy()
+        for idx in range(self.grid_size):
+            parent_oid = int(buf[idx])
+            if parent_oid > 0:
+                q = idx % self.width
+                r = idx // self.width
+                parent_genome = self.organism_genome_map[parent_oid]
+                seed_ct = int(self.organisms[parent_oid].brain_reproduce_cell_type)
+                energy = int(self.organisms[parent_oid].brain_reproduce_energy)
+                brain = self.organism_brain_map.get(parent_oid)
+                body_plan = self.organism_body_plan_map.get(parent_oid)
+                self.create_organism(
+                    q, r, seed_ct, energy,
+                    genome_id=parent_genome,
+                    brain=brain,
+                    body_plan=body_plan,
+                )
 
     # ── Step 7: Death and cleanup ───────────────────────────────
 
@@ -489,7 +573,7 @@ class SimulationEngine:
             if org[i].alive == 1:
                 org[i].age += 1
 
-    def _increment_ages(self) -> None:
+    def increment_ages(self) -> None:
         self._kernel_increment_ages(
             self.organisms,
             self.next_org_id,

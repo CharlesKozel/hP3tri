@@ -152,6 +152,7 @@ def clear_mover_source_cells(
     if oid > 0 and organisms[oid].can_move == 1:
         temp_grid[idx].organism_id = 0
         temp_grid[idx].cell_type = 0
+        temp_grid[idx].direction = 0
 
 
 # ------------------------------------------------------------------------
@@ -178,6 +179,7 @@ def write_mover_destination_cells(
 
         temp_grid[dest].cell_type = grid[idx].cell_type
         temp_grid[dest].organism_id = oid
+        temp_grid[dest].direction = grid[idx].direction
 
 
 # ------------------------------------------------------------------------
@@ -191,6 +193,7 @@ def commit_temp_grid(
 ):
     grid[idx].cell_type = temp_grid[idx].cell_type
     grid[idx].organism_id = temp_grid[idx].organism_id
+    grid[idx].direction = temp_grid[idx].direction
 
 
 # ------------------------------------------------------------------------
