@@ -9,6 +9,16 @@ import {
 
 const HEX_SIZE = 14;
 const SQRT3 = Math.sqrt(3);
+const CELL_ICON_OPACITY = 0.45;
+
+const CELL_TYPE_ICON_PATHS: Record<number, string> = {
+    1: '/icons/soft_tissue.svg',
+    2: '/icons/mouth.svg',
+    3: '/icons/flagella.svg',
+    4: '/icons/eye.svg',
+    5: '/icons/spike.svg',
+    6: '/icons/food.svg',
+};
 
 // Convert axial (q, r) to odd-r offset (col, row) for rectangular display.
 // Data model stays axial — this is purely a rendering transform.
@@ -230,6 +240,22 @@ export default function HexGridCanvas({grid, organisms, cellTypes}: Props) {
 
     const patternCanvases = useMemo(() => createPatternCanvases(), []);
 
+    const [cellIcons, setCellIcons] = useState<Map<number, HTMLImageElement>>(new Map());
+    useEffect(() => {
+        const map = new Map<number, HTMLImageElement>();
+        let loaded = 0;
+        const entries = Object.entries(CELL_TYPE_ICON_PATHS);
+        for (const [idStr, path] of entries) {
+            const img = new Image();
+            img.src = path;
+            img.onload = () => {
+                map.set(Number(idStr), img);
+                loaded++;
+                if (loaded === entries.length) setCellIcons(new Map(map));
+            };
+        }
+    }, []);
+
     const draw = useCallback(() => {
         const canvas = canvasRef.current;
         if (!canvas) return;
@@ -305,6 +331,15 @@ export default function HexGridCanvas({grid, organisms, cellTypes}: Props) {
             } else {
                 drawHex(ctx, px, py, size * 0.7, cellColor, cellColor);
             }
+
+            const icon = cellIcons.get(tile.cellType);
+            if (icon) {
+                const iconSize = tile.organismId !== 0 ? size : size * 0.7;
+                ctx.save();
+                ctx.globalAlpha = CELL_ICON_OPACITY;
+                ctx.drawImage(icon, px - iconSize, py - iconSize, iconSize * 2, iconSize * 2);
+                ctx.restore();
+            }
         }
 
         // Pass 3: Genome tint overlay
@@ -364,7 +399,7 @@ export default function HexGridCanvas({grid, organisms, cellTypes}: Props) {
         }
 
         ctx.restore();
-    }, [grid, offset, zoom, cellColorMap, organismMap, patternCanvases]);
+    }, [grid, offset, zoom, cellColorMap, organismMap, patternCanvases, cellIcons]);
 
     useEffect(() => {
         draw();

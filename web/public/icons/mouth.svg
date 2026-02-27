@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <clipPath id="hex">
+      <polygon points="50,2 93,27 93,73 50,98 7,73 7,27"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#hex)">
+    <path d="M 50,50 L 78,30 A 32,32 0 1,0 78,70 Z"
+          fill="none" stroke="#000" stroke-width="5" stroke-linejoin="round" opacity="0.7"/>
+  </g>
+</svg>
