@@ -13,7 +13,9 @@ if [ -z "${TAICHI_ARCH:-}" ]; then
 fi
 echo "Taichi backend: $TAICHI_ARCH"
 
-JEP_PATH=$(python3 -c "import jep; print(jep.__path__[0])")
+# Find Jep native library path without importing jep (which requires Java embedding)
+JEP_PATH=$(python3 -c "import importlib.util; print(importlib.util.find_spec('jep').submodule_search_locations[0])")
+echo "Jep path: $JEP_PATH"
 
 export JAVA_OPTS="${JAVA_OPTS:-} \
     -Djava.library.path=$JEP_PATH \

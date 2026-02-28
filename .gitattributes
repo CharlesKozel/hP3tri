@@ -1,0 +1,21 @@
+# Force LF line endings for all text files
+* text=auto eol=lf
+
+# Ensure these are always LF (critical for Docker/Linux)
+*.sh text eol=lf
+*.py text eol=lf
+*.kt text eol=lf
+*.kts text eol=lf
+*.gradle text eol=lf
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
+*.xml text eol=lf
+*.properties text eol=lf
+Dockerfile text eol=lf
+
+# Binary files - don't touch
+*.png binary
+*.jpg binary
+*.jar binary

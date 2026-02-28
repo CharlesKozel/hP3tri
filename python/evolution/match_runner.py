@@ -10,6 +10,21 @@ from body_plans.cppn import CppnBodyPlan, CPPN_TOTAL_WEIGHTS, CPPN_NUM_HIDDEN
 from brains.rule_brain import RuleBrain
 
 
+_cached_engine: SimulationEngine | None = None
+
+
+def _get_engine(width: int, height: int, seed: int) -> SimulationEngine:
+    """Get or create a reusable engine (avoids Taichi recompilation per match)."""
+    global _cached_engine
+    if (_cached_engine is not None
+            and _cached_engine.width == width
+            and _cached_engine.height == height):
+        _cached_engine.reset(seed)
+        return _cached_engine
+    _cached_engine = SimulationEngine(width, height, seed)
+    return _cached_engine
+
+
 def run_evolution_match(
     config: dict[str, Any],
     genome_dicts: list[dict[str, Any]],
@@ -27,7 +42,7 @@ def run_evolution_match(
     food_respawn_interval: int = config.get("food_respawn_interval", 20)
 
     rng = np.random.default_rng(seed)
-    engine = SimulationEngine(width, height, seed)
+    engine = _get_engine(width, height, seed)
 
     genome_id_to_genome: dict[int, dict[str, Any]] = {}
     org_ids_by_genome: dict[int, list[int]] = {}
@@ -44,6 +59,9 @@ def run_evolution_match(
         body_plan = CppnBodyPlan(weights, activations, symmetry)
         brain = RuleBrain(brain_params)
 
+        # Load genome-specific brain params into the GPU Taichi field
+        engine.set_genome_brain_params(gid, brain_params)
+
         template = body_plan.generate_template(dev_time=0.0)
 
         genome_data: dict[str, Any] = {
@@ -53,16 +71,18 @@ def run_evolution_match(
 
         q = int(rng.integers(4, width - 4))
         r = int(rng.integers(4, height - 4))
-        seed_ct = int(CellType.SOFT_TISSUE)
 
         org_id = engine.create_organism(
             seed_q=q, seed_r=r,
-            seed_cell_type=seed_ct,
-            starting_energy=200,
+            seed_cell_type=int(CellType.SOFT_TISSUE),
+            starting_energy=800,
             genome_id=gid,
             brain=brain,
             body_plan=body_plan,
         )
+
+        # Place starter PHOTOSYNTHETIC cells so organism has energy generation
+        _place_starter_cells(engine, org_id, q, r, width, height)
 
         genome_data["origin_q"] = q
         genome_data["origin_r"] = r
@@ -71,16 +91,9 @@ def run_evolution_match(
 
     _place_food(engine, food_count, rng)
 
-    peak_cells: dict[int, int] = {gid: 0 for gid in genome_id_to_genome}
-
     engine.recompute_aggregates()
     for tick in range(tick_limit):
         engine.step()
-
-        for gid in genome_id_to_genome:
-            total = _count_genome_cells(engine, gid)
-            if total > peak_cells[gid]:
-                peak_cells[gid] = total
 
         if food_respawn_interval > 0 and tick > 0 and tick % food_respawn_interval == 0:
             _place_food(engine, food_respawn_rate, rng)
@@ -96,7 +109,7 @@ def run_evolution_match(
             "genome_id": gid,
             "final_cell_count": final_cells,
             "survived": survived,
-            "peak_cell_count": peak_cells[gid],
+            "peak_cell_count": final_cells,
             "final_energy": final_energy,
             "mobility": float(mobility),
             "aggression": float(aggression),
@@ -109,7 +122,10 @@ def run_visualizable_match(
     config: dict[str, Any],
     genome_dicts: list[dict[str, Any]],
 ) -> list[dict]:
-    """Run a match and return full replay frames for visualization."""
+    """Run a match and return sampled replay frames for visualization.
+
+    Snapshots every snapshot_interval ticks to reduce GPU-CPU transfer overhead.
+    """
     width: int = config.get("width", 64)
     height: int = config.get("height", 64)
     tick_limit: int = config.get("tick_limit", 200)
@@ -117,9 +133,10 @@ def run_visualizable_match(
     food_count: int = config.get("food_count", 40)
     food_respawn_rate: int = config.get("food_respawn_rate", 3)
     food_respawn_interval: int = config.get("food_respawn_interval", 20)
+    snapshot_interval: int = config.get("snapshot_interval", 3)
 
     rng = np.random.default_rng(seed)
-    engine = SimulationEngine(width, height, seed)
+    engine = _get_engine(width, height, seed)
 
     for genome_dict in genome_dicts:
         gid = int(genome_dict["id"])
@@ -132,6 +149,9 @@ def run_visualizable_match(
         body_plan = CppnBodyPlan(weights, activations, symmetry)
         brain = RuleBrain(brain_params)
 
+        # Load genome-specific brain params into the GPU Taichi field
+        engine.set_genome_brain_params(gid, brain_params)
+
         template = body_plan.generate_template(dev_time=0.0)
         genome_data: dict[str, Any] = {"body_template": template}
         engine.genome_registry[gid] = genome_data
@@ -143,11 +163,13 @@ def run_visualizable_match(
         engine.create_organism(
             seed_q=q, seed_r=r,
             seed_cell_type=seed_ct,
-            starting_energy=200,
+            starting_energy=800,
             genome_id=gid,
             brain=brain,
             body_plan=body_plan,
         )
+
+        _place_starter_cells(engine, engine.next_org_id - 1, q, r, width, height)
 
         genome_data["origin_q"] = q
         genome_data["origin_r"] = r
@@ -160,12 +182,42 @@ def run_visualizable_match(
 
     for tick in range(tick_limit):
         engine.step()
-        replay.append(engine.snapshot())
+
+        if tick % snapshot_interval == 0 or tick == tick_limit - 1:
+            replay.append(engine.snapshot())
 
         if food_respawn_interval > 0 and tick > 0 and tick % food_respawn_interval == 0:
             _place_food(engine, food_respawn_rate, rng)
 
     return replay
+
+
+def _place_starter_cells(
+    engine: SimulationEngine,
+    org_id: int,
+    center_q: int,
+    center_r: int,
+    width: int,
+    height: int,
+) -> None:
+    """Place PHOTOSYNTHETIC + MOUTH cells around the seed to bootstrap viability."""
+    from simulator.hex_grid import NEIGHBOR_OFFSETS
+    starter_types = [
+        int(CellType.PHOTOSYNTHETIC),
+        int(CellType.PHOTOSYNTHETIC),
+        int(CellType.PHOTOSYNTHETIC),
+        int(CellType.MOUTH),
+    ]
+    placed = 0
+    for dq, dr in NEIGHBOR_OFFSETS:
+        if placed >= len(starter_types):
+            break
+        nq = (center_q + dq) % width
+        nr = (center_r + dr) % height
+        idx = nr * width + nq
+        if int(engine.grid[idx].cell_type) == 0:
+            engine.place_cell(org_id, nq, nr, starter_types[placed])
+            placed += 1
 
 
 def _place_food(engine: SimulationEngine, count: int, rng: np.random.Generator) -> None:

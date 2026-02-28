@@ -198,14 +198,19 @@ def evaluate_brain_gpu(
             if food_sector >= 0 and p_grow_food > 0.5:
                 grow_dir = food_sector
 
-            # Select growth cell type based on weights (simplified: use max weight)
+            # Select growth cell type based on weights (skip NULL=0 and FOOD=6)
+            # Mapping: weight idx 0-7 → cell types [1,2,3,4,5,7,8,9]
             grow_type = 1  # Default SOFT_TISSUE
             max_weight = ti.cast(0.0, ti.f32)
             for ct_idx in ti.static(range(8)):
                 w = brain_params[genome_id, P_CELL_TYPE_WEIGHT_START + ct_idx]
+                # Map weight index to actual cell type, skipping FOOD(6)
+                mapped_ct = ct_idx + 1
+                if mapped_ct >= 6:
+                    mapped_ct = ct_idx + 2  # Skip over FOOD
                 if w > max_weight:
                     max_weight = w
-                    grow_type = ct_idx + 1  # Offset by 1 (skip NULL)
+                    grow_type = mapped_ct
 
             organisms[oid].brain_wants_grow = 1
             organisms[oid].brain_grow_direction = grow_dir

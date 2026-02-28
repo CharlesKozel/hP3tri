@@ -13,7 +13,7 @@ data class EvolutionConfig(
     val tickLimit: Int = 500,
     val foodCount: Int = 80,
     val foodRespawnRate: Int = 5,
-    val symbiosisWeight: Float = 0.3f,
+    val symbiosisWeight: Float = 0.5f,
     val mapElitesBinsX: Int = 8,
     val mapElitesBinsY: Int = 8,
     val mutationSigma: Float = 0.1f,
@@ -22,5 +22,5 @@ data class EvolutionConfig(
     val sampleMatchWidth: Int = 64,
     val sampleMatchHeight: Int = 64,
     val sampleMatchTickLimit: Int = 200,
-    val showcaseInterval: Int = 5,
+    val showcaseInterval: Int = 1,
 )

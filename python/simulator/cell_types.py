@@ -49,7 +49,7 @@ CELL_PROPERTIES: dict[CellType, CellProps] = {
     CellType.EYE:            CellProps(2,  6,  2, 0,  0, 3,  '#ffffff', 'Eye', vision_range=5, vision_expansion=1, directional=1),
     CellType.SPIKE:          CellProps(3, 12,  4, 0,  0, 6,  '#ff6600', 'Spike', action_rank=3),
     CellType.FOOD:           CellProps(0, 10,  5, 0,  0, 10, '#66dd66', 'Food'),
-    CellType.PHOTOSYNTHETIC: CellProps(1,  5,  2, 0,  2, 3,  '#33aa33', 'Photosynthetic', can_reproduce=1),
+    CellType.PHOTOSYNTHETIC: CellProps(1,  5,  2, 0,  3, 3,  '#33aa33', 'Photosynthetic', can_reproduce=1),
     CellType.ARMOR:          CellProps(1, 15,  6, 0,  0, 0,  '#8888aa', 'Armor'),
     CellType.SKIN:           CellProps(1,  3,  2, 0,  0, 1,  '#ddbb88', 'Skin', can_reproduce=1),
 }

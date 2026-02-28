@@ -177,6 +177,26 @@ class SimulationEngine:
         self.ct_fields = CellTypeFields()
         self.ct_fields.load()
 
+    def reset(self, seed: int = 42) -> None:
+        """Reset all state for engine reuse across matches (avoids Taichi recompilation)."""
+        self.tick_count = 0
+        self.next_org_id = 1
+        self.organism_genome_map.clear()
+        self.organism_brain_map.clear()
+        self.organism_body_plan_map.clear()
+        self.genome_registry.clear()
+        self.rng = np.random.default_rng(seed)
+
+        # Zero all GPU fields
+        self.grid.fill(0)
+        self.organisms.fill(0)
+        self.reproduce_count[None] = 0
+        self.any_connectivity_needed[None] = 0
+        self.connectivity_changed[None] = 0
+
+        # Re-init default brain params
+        self._init_default_brain_params()
+
     def _init_default_brain_params(self) -> None:
         """Initialize default brain parameters for genome 0."""
         defaults = np.zeros(NUM_BRAIN_PARAMS, dtype=np.float32)
@@ -224,6 +244,46 @@ class SimulationEngine:
         self.process_death_and_disconnection()
 
         self.increment_ages()
+
+    def step_profiled(self) -> dict[str, float]:
+        """Profiled version of step() that returns per-phase timings."""
+        import time as _t
+        timings: dict[str, float] = {}
+        self.tick_count += 1
+
+        t0 = _t.perf_counter()
+        self.recompute_aggregates()
+        timings['aggregates'] = _t.perf_counter() - t0
+
+        t0 = _t.perf_counter()
+        self.apply_resources()
+        timings['resources'] = _t.perf_counter() - t0
+
+        t0 = _t.perf_counter()
+        self.step_sensors()
+        timings['sensors'] = _t.perf_counter() - t0
+
+        t0 = _t.perf_counter()
+        self.step_brains()
+        timings['brains'] = _t.perf_counter() - t0
+
+        t0 = _t.perf_counter()
+        self.process_movement()
+        timings['movement'] = _t.perf_counter() - t0
+
+        t0 = _t.perf_counter()
+        self.step_actions()
+        timings['actions'] = _t.perf_counter() - t0
+
+        t0 = _t.perf_counter()
+        self.process_death_and_disconnection()
+        timings['death'] = _t.perf_counter() - t0
+
+        t0 = _t.perf_counter()
+        self.increment_ages()
+        timings['ages'] = _t.perf_counter() - t0
+
+        return timings
 
     def create_organism(
         self,

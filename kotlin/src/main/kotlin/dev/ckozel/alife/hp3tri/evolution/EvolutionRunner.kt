@@ -86,10 +86,9 @@ class EvolutionRunner(
                 for (matchIdx in 0 until config.matchesPerGeneration) {
                     if (shouldStop) break
 
-                    val competitors = if (gen == 0 || archive.allGenomes().isEmpty()) {
-                        List(config.genomesPerMatch) { population[rng.nextInt(population.size)] }
-                    } else {
-                        archive.sampleDiverse(config.genomesPerMatch, rng)
+                    // Always sample from the full population to evaluate new mutants
+                    val competitors = List(config.genomesPerMatch) {
+                        population[rng.nextInt(population.size)]
                     }
 
                     competitors.forEach { participatingGenomes[it.id] = it }
@@ -107,6 +106,7 @@ class EvolutionRunner(
                     genomes = participatingGenomes.values.toList(),
                     perMatchResults = perMatchResults,
                     symbiosisWeight = config.symbiosisWeight,
+                    totalGridArea = config.gridWidth * config.gridHeight,
                 )
 
                 for (sg in scored) {
@@ -221,29 +221,41 @@ class EvolutionRunner(
         scored: List<ScoredGenome>,
     ): List<Genome> {
         val eliteCount = (config.populationSize * 0.1).toInt()
+        val freshCount = (config.populationSize * 0.1).toInt()
         val crossoverCount = (config.populationSize * 0.2).toInt()
-        val mutationCount = config.populationSize - eliteCount - crossoverCount
+        val mutationCount = config.populationSize - eliteCount - crossoverCount - freshCount
 
         val result = mutableListOf<Genome>()
 
+        // Elites: top performers pass through unchanged
         val elites = scored.sortedByDescending { it.fitness }.take(eliteCount)
         result.addAll(elites.map { it.genome })
 
+        // Combine archive + scored genomes as parent pool for diversity
+        val parentPool = (archive.allGenomes().map { it.first } + scored.map { it.genome })
+            .distinctBy { it.id }
+
+        // Tournament selection helper: pick best of 3 random candidates
+        fun tournamentSelect(): Genome {
+            if (parentPool.size <= 3) return parentPool[rng.nextInt(parentPool.size)]
+            val candidates = List(3) { parentPool[rng.nextInt(parentPool.size)] }
+            val scoredMap = scored.associateBy { it.genome.id }
+            return candidates.maxByOrNull { scoredMap[it.id]?.fitness ?: 0f } ?: candidates[0]
+        }
+
         repeat(mutationCount) {
-            val parent = archive.sample(1, rng).firstOrNull()
-                ?: scored.random().genome
-            result.add(mutate(parent, rng).copy(id = nextGenomeId++))
+            result.add(mutate(tournamentSelect(), rng).copy(id = nextGenomeId++))
         }
 
         repeat(crossoverCount) {
-            val parents = archive.sample(2, rng)
-            if (parents.size >= 2) {
-                result.add(crossover(parents[0], parents[1], nextGenomeId++, rng))
-            } else {
-                val parent = archive.sample(1, rng).firstOrNull()
-                    ?: scored.random().genome
-                result.add(mutate(parent, rng).copy(id = nextGenomeId++))
-            }
+            val p1 = tournamentSelect()
+            val p2 = tournamentSelect()
+            result.add(crossover(p1, p2, nextGenomeId++, rng))
+        }
+
+        // Fresh random genomes to maintain exploration
+        repeat(freshCount) {
+            result.add(randomGenome(nextGenomeId++, rng))
         }
 
         return result

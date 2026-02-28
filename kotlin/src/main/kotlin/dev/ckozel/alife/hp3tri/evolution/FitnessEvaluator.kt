@@ -22,25 +22,29 @@ fun computeFitness(
     genomes: List<Genome>,
     perMatchResults: List<List<MatchResult>>,
     symbiosisWeight: Float,
+    totalGridArea: Int,
 ): List<ScoredGenome> {
-    val genomeMap = genomes.associateBy { it.id }
+    // Fitness = (my_cells / total_area) + symbiosisWeight * (other_cells / total_area)
+    // Area-relative scoring rewards grid dominance; symbiosis bonus rewards mutual life.
     val genomeFitness = mutableMapOf<Int, MutableList<Float>>()
     val genomeMobility = mutableMapOf<Int, MutableList<Float>>()
     val genomeAggression = mutableMapOf<Int, MutableList<Float>>()
     val genomeSurvived = mutableMapOf<Int, MutableList<Boolean>>()
 
+    val area = totalGridArea.toFloat().coerceAtLeast(1f)
+
     for (matchResults in perMatchResults) {
         val survivedInMatch = matchResults.filter { it.survived }
         for (result in matchResults) {
-            var competitive = result.finalCellCount.toFloat()
+            val myAreaFraction = result.finalCellCount.toFloat() / area
 
-            val symbiosisBonus = if (result.survived) {
+            val othersAreaFraction = if (result.survived) {
                 survivedInMatch.filter { it.genomeId != result.genomeId }
                     .sumOf { it.finalCellCount.toDouble() }
-                    .toFloat() * symbiosisWeight
+                    .toFloat() / area
             } else 0f
 
-            val score = competitive + symbiosisBonus
+            val score = myAreaFraction + symbiosisWeight * othersAreaFraction
 
             genomeFitness.getOrPut(result.genomeId) { mutableListOf() }.add(score)
             genomeMobility.getOrPut(result.genomeId) { mutableListOf() }.add(result.mobility)
@@ -56,7 +60,7 @@ fun computeFitness(
         val avgFitness = fitnesses.average().toFloat()
         val survivalRate = genomeSurvived[genome.id]?.count { it }?.toFloat()
             ?.div(genomeSurvived[genome.id]!!.size) ?: 0f
-        val viability = if (survivalRate > 0.5f) 50f else 0f
+        val viability = if (survivalRate > 0.3f) 0.1f else 0f
 
         val totalFitness = avgFitness + viability
 
