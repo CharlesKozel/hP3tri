@@ -3,6 +3,7 @@ import MapElitesGrid from '../components/MapElitesGrid';
 import FitnessChart from '../components/FitnessChart';
 import EvolutionLog from '../components/EvolutionLog';
 import GenomeInfo from '../components/GenomeInfo';
+import {getApiBase} from '../api';
 import type {ArchiveEntry, EvolutionStatus, HistoryEntry} from '../types';
 
 const POLL_INTERVAL = 2000;
@@ -17,8 +18,9 @@ export default function EvolutionDashboard() {
     const pollRef = useRef<number | null>(null);
 
     const fetchStatus = useCallback(async () => {
+        const base = getApiBase();
         try {
-            const res = await fetch('/api/evolution/status');
+            const res = await fetch(`${base}/api/evolution/status`);
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data: EvolutionStatus = await res.json();
             setStatus(data);
@@ -27,8 +29,8 @@ export default function EvolutionDashboard() {
             if (data.generation !== lastGenRef.current) {
                 lastGenRef.current = data.generation;
                 const [archiveRes, historyRes] = await Promise.all([
-                    fetch('/api/evolution/archive'),
-                    fetch('/api/evolution/history'),
+                    fetch(`${base}/api/evolution/archive`),
+                    fetch(`${base}/api/evolution/history`),
                 ]);
                 if (archiveRes.ok) setArchive(await archiveRes.json());
                 if (historyRes.ok) setHistory(await historyRes.json());
@@ -48,7 +50,7 @@ export default function EvolutionDashboard() {
 
     const handleStart = async () => {
         try {
-            const res = await fetch('/api/evolution/start', {method: 'POST'});
+            const res = await fetch(`${getApiBase()}/api/evolution/start`, {method: 'POST'});
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             await fetchStatus();
         } catch (err) {
@@ -58,7 +60,7 @@ export default function EvolutionDashboard() {
 
     const handleStop = async () => {
         try {
-            const res = await fetch('/api/evolution/stop', {method: 'POST'});
+            const res = await fetch(`${getApiBase()}/api/evolution/stop`, {method: 'POST'});
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             await fetchStatus();
         } catch (err) {

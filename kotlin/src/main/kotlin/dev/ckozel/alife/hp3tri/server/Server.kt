@@ -89,8 +89,7 @@ fun startServer(bridge: JepBridge, port: Int = 8080) {
             })
         }
         install(CORS) {
-            allowHost("localhost:5173")
-            allowHost("127.0.0.1:5173")
+            anyHost()
             allowHeader(HttpHeaders.ContentType)
             allowMethod(HttpMethod.Get)
             allowMethod(HttpMethod.Post)

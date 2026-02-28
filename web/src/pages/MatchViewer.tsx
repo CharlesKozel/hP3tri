@@ -2,6 +2,7 @@ import {useCallback, useEffect, useRef, useState} from 'react';
 import {useSearchParams} from 'react-router-dom';
 import HexGridCanvas from '../components/HexGridCanvas';
 import StatsPanel from '../components/StatsPanel';
+import {getApiBase} from '../api';
 import type {CellTypeInfo, ReplayInfo, SimulationState} from '../types';
 
 export default function MatchViewer() {
@@ -21,6 +22,7 @@ export default function MatchViewer() {
         setLoading(true);
         setError(null);
         try {
+            const base = getApiBase();
             const genomes = searchParams.get('genomes');
 
             let replayPromise: Promise<Response>;
@@ -28,18 +30,18 @@ export default function MatchViewer() {
 
             if (genomes) {
                 const genomeIds = genomes.split(',').map(Number).filter(n => !isNaN(n));
-                replayPromise = fetch('/api/evolution/run-match', {
+                replayPromise = fetch(`${base}/api/evolution/run-match`, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({genomeIds, gridWidth: 64, gridHeight: 64, tickLimit: 200}),
                 });
                 infoPromise = replayPromise.then(res => res.clone());
             } else {
-                replayPromise = fetch('/api/replay');
-                infoPromise = fetch('/api/replay/info');
+                replayPromise = fetch(`${base}/api/replay`);
+                infoPromise = fetch(`${base}/api/replay/info`);
             }
 
-            const cellTypesRes = await fetch('/api/cell-types');
+            const cellTypesRes = await fetch(`${base}/api/cell-types`);
             if (!cellTypesRes.ok) throw new Error(`HTTP ${cellTypesRes.status}`);
             const types: CellTypeInfo[] = await cellTypesRes.json();
             setCellTypes(types);
@@ -105,7 +107,7 @@ export default function MatchViewer() {
         setPlaying(false);
         setLoading(true);
         try {
-            const res = await fetch('/api/simulation/reset', {method: 'POST'});
+            const res = await fetch(`${getApiBase()}/api/simulation/reset`, {method: 'POST'});
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             await fetchReplay();
         } catch (err) {
