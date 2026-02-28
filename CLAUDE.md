@@ -37,6 +37,9 @@ This project is a **2D artificial life evolution simulator** where genetically d
 #### **Python**:
  - ALWAYS include type hints and type annotations were possible. (Except in Taichi kernels, where it breaks compilation)
 
+#### **Kotlin**:
+ - No * imports, full paths for everything.
+
 ### Key Libraries & Frameworks
 - **Jep (Java Embedded Python)**: Embeds a Python interpreter inside the JVM process. Kotlin calls Python functions directly with near-zero overhead. NumPy arrays can be shared with minimal copying. This avoids subprocess/serialization overhead of a client-server architecture.
 - **Taichi Lang** (Python): GPU-acceleratable simulation kernels. Compiles Python-like code to CUDA/OpenCL/CPU-LLVM. Supports hex grid simulations natively. CPU mode is fast enough for development; GPU mode for production evolution runs.

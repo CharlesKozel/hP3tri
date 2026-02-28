@@ -22,4 +22,5 @@ data class EvolutionConfig(
     val sampleMatchWidth: Int = 64,
     val sampleMatchHeight: Int = 64,
     val sampleMatchTickLimit: Int = 200,
+    val showcaseInterval: Int = 5,
 )

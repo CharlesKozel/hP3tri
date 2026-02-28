@@ -1,9 +1,10 @@
 package dev.ckozel.alife.hp3tri.server
 
 import dev.ckozel.alife.hp3tri.bridge.JepBridge
-import dev.ckozel.alife.hp3tri.evolution.EvolutionConfig
-import dev.ckozel.alife.hp3tri.evolution.EvolutionRunner
 import dev.ckozel.alife.hp3tri.genome.toDict
+import dev.ckozel.alife.hp3tri.queue.CurrentRunResponse
+import dev.ckozel.alife.hp3tri.queue.JobConfig
+import dev.ckozel.alife.hp3tri.queue.JobScheduler
 import dev.ckozel.alife.hp3tri.simulation.Simulation
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
@@ -77,9 +78,7 @@ private val defaultConfig: Map<String, Any> = mapOf(
 fun startServer(bridge: JepBridge, port: Int = 8080) {
     val cellTypes = bridge.getCellTypes()
     var simulation = Simulation(bridge, defaultConfig)
-
-    var evolutionRunner: EvolutionRunner? = null
-    val config = EvolutionConfig()
+    val scheduler = JobScheduler(bridge)
 
     embeddedServer(Netty, port = port) {
         install(ContentNegotiation) {
@@ -93,6 +92,7 @@ fun startServer(bridge: JepBridge, port: Int = 8080) {
             allowHeader(HttpHeaders.ContentType)
             allowMethod(HttpMethod.Get)
             allowMethod(HttpMethod.Post)
+            allowMethod(HttpMethod.Delete)
         }
 
         routing {
@@ -124,36 +124,33 @@ fun startServer(bridge: JepBridge, port: Int = 8080) {
                 call.respond(ReplayInfo(simulation.totalTicks, simulation.width, simulation.height))
             }
 
+            // Evolution routes — delegate to scheduler's current run
             post("/api/evolution/start") {
-                val runner = evolutionRunner
-                if (runner != null && runner.running) {
+                val active = scheduler.currentRun
+                if (active != null && active.runner.running) {
                     call.respond(HttpStatusCode.Conflict, "Evolution already running")
                     return@post
                 }
-                val newRunner = EvolutionRunner(bridge, config)
-                evolutionRunner = newRunner
-                launch(Dispatchers.IO) {
-                    newRunner.run()
-                }
-                call.respond(HttpStatusCode.OK, mapOf("status" to "started"))
+                call.respond(HttpStatusCode.BadRequest, "Use /api/queue/submit to start evolution runs")
             }
 
             post("/api/evolution/stop") {
-                val runner = evolutionRunner
-                if (runner == null || !runner.running) {
+                val active = scheduler.currentRun
+                if (active == null || !active.runner.running) {
                     call.respond(HttpStatusCode.OK, mapOf("status" to "not_running"))
                     return@post
                 }
-                runner.shouldStop = true
+                scheduler.pauseCurrentRun()
                 call.respond(HttpStatusCode.OK, mapOf("status" to "stopping"))
             }
 
             get("/api/evolution/status") {
-                val runner = evolutionRunner
+                val runner = scheduler.currentRun?.runner
+                val config = scheduler.currentRun?.jobConfig?.evolution
                 val status = EvolutionStatusResponse(
                     running = runner?.running ?: false,
                     generation = runner?.currentGeneration ?: 0,
-                    totalGenerations = config.generations,
+                    totalGenerations = config?.generations ?: 0,
                     archiveFillRate = runner?.archive?.fillRate() ?: 0f,
                     bestFitness = runner?.archive?.bestFitness() ?: 0f,
                     matchesCompleted = runner?.matchesCompletedThisGen ?: 0,
@@ -163,7 +160,7 @@ fun startServer(bridge: JepBridge, port: Int = 8080) {
             }
 
             get("/api/evolution/archive") {
-                val runner = evolutionRunner
+                val runner = scheduler.currentRun?.runner
                 if (runner == null) {
                     call.respond(emptyList<ArchiveEntryResponse>())
                     return@get
@@ -183,7 +180,7 @@ fun startServer(bridge: JepBridge, port: Int = 8080) {
             }
 
             get("/api/evolution/history") {
-                val runner = evolutionRunner
+                val runner = scheduler.currentRun?.runner
                 if (runner == null) {
                     call.respond(emptyList<HistoryEntryResponse>())
                     return@get
@@ -201,7 +198,7 @@ fun startServer(bridge: JepBridge, port: Int = 8080) {
 
             post("/api/evolution/run-match") {
                 val request = call.receive<RunMatchRequest>()
-                val runner = evolutionRunner
+                val runner = scheduler.currentRun?.runner
                 if (runner == null) {
                     call.respond(HttpStatusCode.BadRequest, "No evolution data available. Start evolution first.")
                     return@post
@@ -233,12 +230,157 @@ fun startServer(bridge: JepBridge, port: Int = 8080) {
                 call.respond(mapOf("frames" to frames))
             }
 
+            // Queue routes
+            get("/api/queue/pending") {
+                call.respond(scheduler.listPending())
+            }
+
+            post("/api/queue/submit") {
+                val config = call.receive<JobConfig>()
+                val filename = scheduler.submitJob(config)
+                call.respond(mapOf("filename" to filename, "status" to "queued"))
+            }
+
+            delete("/api/queue/pending/{filename}") {
+                val filename = call.parameters["filename"]
+                if (filename == null) {
+                    call.respond(HttpStatusCode.BadRequest, "Missing filename")
+                    return@delete
+                }
+                val removed = scheduler.removePendingJob(filename)
+                if (removed) {
+                    call.respond(mapOf("status" to "removed"))
+                } else {
+                    call.respond(HttpStatusCode.NotFound, "Job not found")
+                }
+            }
+
+            get("/api/queue/runs") {
+                call.respond(scheduler.listRuns())
+            }
+
+            get("/api/queue/runs/{runId}/status") {
+                val runId = call.parameters["runId"]
+                if (runId == null) {
+                    call.respond(HttpStatusCode.BadRequest, "Missing runId")
+                    return@get
+                }
+                val status = scheduler.getRunStatus(runId)
+                if (status == null) {
+                    call.respond(HttpStatusCode.NotFound, "Run not found")
+                    return@get
+                }
+                call.respond(status)
+            }
+
+            get("/api/queue/runs/{runId}/log") {
+                val runId = call.parameters["runId"]
+                if (runId == null) {
+                    call.respond(HttpStatusCode.BadRequest, "Missing runId")
+                    return@get
+                }
+                val log = scheduler.getRunLog(runId)
+                if (log == null) {
+                    call.respond(HttpStatusCode.NotFound, "Run not found")
+                    return@get
+                }
+                call.respondText(log, ContentType.Text.Plain)
+            }
+
+            post("/api/queue/pause") {
+                val active = scheduler.currentRun
+                if (active == null || !active.runner.running) {
+                    call.respond(HttpStatusCode.OK, mapOf("status" to "not_running"))
+                    return@post
+                }
+                scheduler.pauseCurrentRun()
+                call.respond(mapOf("status" to "pausing"))
+            }
+
+            post("/api/queue/cancel") {
+                val active = scheduler.currentRun
+                if (active == null || !active.runner.running) {
+                    call.respond(HttpStatusCode.OK, mapOf("status" to "not_running"))
+                    return@post
+                }
+                scheduler.cancelCurrentRun()
+                call.respond(mapOf("status" to "cancelling"))
+            }
+
+            get("/api/queue/current") {
+                val active = scheduler.currentRun
+                if (active == null || !active.runner.running) {
+                    call.respond(HttpStatusCode.NoContent)
+                    return@get
+                }
+                call.respond(CurrentRunResponse(
+                    runId = active.runId,
+                    jobName = active.jobConfig.name,
+                    state = "running",
+                    generation = active.runner.currentGeneration,
+                    totalGenerations = active.jobConfig.evolution.generations,
+                    bestFitness = active.runner.archive.bestFitness(),
+                    archiveFillRate = active.runner.archive.fillRate(),
+                    matchesCompleted = active.runner.matchesCompletedThisGen,
+                ))
+            }
+
+            // Replay routes
+            get("/api/queue/runs/{runId}/replays") {
+                val runId = call.parameters["runId"]
+                if (runId == null) {
+                    call.respond(HttpStatusCode.BadRequest, "Missing runId")
+                    return@get
+                }
+                val gens = scheduler.listReplayGenerations(runId)
+                if (gens == null) {
+                    call.respond(HttpStatusCode.NotFound, "No replays found")
+                    return@get
+                }
+                call.respond(gens)
+            }
+
+            get("/api/queue/runs/{runId}/replays/{gen}") {
+                val runId = call.parameters["runId"]
+                val gen = call.parameters["gen"]?.toIntOrNull()
+                if (runId == null || gen == null) {
+                    call.respond(HttpStatusCode.BadRequest, "Missing parameters")
+                    return@get
+                }
+                val index = scheduler.getReplayIndex(runId, gen)
+                if (index == null) {
+                    call.respond(HttpStatusCode.NotFound, "Replay index not found")
+                    return@get
+                }
+                call.respondText(index, ContentType.Application.Json)
+            }
+
+            get("/api/queue/runs/{runId}/replays/{gen}/{matchIdx}") {
+                val runId = call.parameters["runId"]
+                val gen = call.parameters["gen"]?.toIntOrNull()
+                val matchIdx = call.parameters["matchIdx"]?.toIntOrNull()
+                if (runId == null || gen == null || matchIdx == null) {
+                    call.respond(HttpStatusCode.BadRequest, "Missing parameters")
+                    return@get
+                }
+                val matchData = scheduler.getReplayMatch(runId, gen, matchIdx)
+                if (matchData == null) {
+                    call.respond(HttpStatusCode.NotFound, "Replay match not found")
+                    return@get
+                }
+                call.respondText("{\"frames\":$matchData}", ContentType.Application.Json)
+            }
+
             val webDist = File("web/dist")
             if (webDist.isDirectory) {
                 staticFiles("/", webDist) {
                     default("index.html")
                 }
             }
+        }
+
+        launch(Dispatchers.IO) {
+            scheduler.start()
         }
     }.start(wait = true)
 }

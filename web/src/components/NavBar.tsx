@@ -37,6 +37,9 @@ export default function NavBar() {
             <NavLink to={`/match${hostQuery}`} style={({isActive}) => isActive ? activeLinkStyle : linkStyle}>
                 Match Viewer
             </NavLink>
+            <NavLink to={`/queue${hostQuery}`} style={({isActive}) => isActive ? activeLinkStyle : linkStyle}>
+                Queue
+            </NavLink>
             {host && <span style={{color: '#666', fontSize: 11, marginLeft: 'auto'}}>remote: {host}</span>}
         </nav>
     );

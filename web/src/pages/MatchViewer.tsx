@@ -23,12 +23,19 @@ export default function MatchViewer() {
         setError(null);
         try {
             const base = getApiBase();
+            const runId = searchParams.get('run');
+            const gen = searchParams.get('gen');
+            const matchIdx = searchParams.get('match');
             const genomes = searchParams.get('genomes');
 
             let replayPromise: Promise<Response>;
             let infoPromise: Promise<Response>;
 
-            if (genomes) {
+            if (runId && gen !== null && matchIdx !== null) {
+                const url = `${base}/api/queue/runs/${encodeURIComponent(runId)}/replays/${gen}/${matchIdx}`;
+                replayPromise = fetch(url);
+                infoPromise = replayPromise.then(res => res.clone());
+            } else if (genomes) {
                 const genomeIds = genomes.split(',').map(Number).filter(n => !isNaN(n));
                 replayPromise = fetch(`${base}/api/evolution/run-match`, {
                     method: 'POST',
@@ -46,7 +53,7 @@ export default function MatchViewer() {
             const types: CellTypeInfo[] = await cellTypesRes.json();
             setCellTypes(types);
 
-            if (genomes) {
+            if (runId || genomes) {
                 const replayRes = await replayPromise;
                 if (!replayRes.ok) throw new Error(`HTTP ${replayRes.status}`);
                 const data = await replayRes.json();

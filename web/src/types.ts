@@ -103,3 +103,18 @@ export interface HistoryEntry {
     avgFitness: number;
     fillRate: number;
 }
+
+export interface ReplayMatchEntry {
+    matchIndex: number;
+    filename: string;
+    genomeIds: number[];
+    totalTicks: number;
+}
+
+export interface ReplayIndex {
+    generation: number;
+    gridWidth: number;
+    gridHeight: number;
+    tickLimit: number;
+    matches: ReplayMatchEntry[];
+}

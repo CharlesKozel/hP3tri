@@ -1,13 +1,27 @@
 package dev.ckozel.alife.hp3tri.evolution
 
 import dev.ckozel.alife.hp3tri.bridge.JepBridge
-import dev.ckozel.alife.hp3tri.genome.*
+import dev.ckozel.alife.hp3tri.genome.Genome
+import dev.ckozel.alife.hp3tri.genome.crossover
+import dev.ckozel.alife.hp3tri.genome.mutate
+import dev.ckozel.alife.hp3tri.genome.randomGenome
+import dev.ckozel.alife.hp3tri.genome.toDict
+import dev.ckozel.alife.hp3tri.grid.SimulationState
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.Json
+import java.io.File
 import java.util.Random
 
 class EvolutionRunner(
     val bridge: JepBridge,
     val config: EvolutionConfig,
+    val checkpointDir: String = "data/checkpoints",
+    val replayDir: String? = null,
+    val initialCheckpoint: CheckpointData? = null,
+    val onLog: ((String) -> Unit)? = null,
+    val onGenerationComplete: ((Int) -> Unit)? = null,
 ) {
+    private val replayJson = Json { prettyPrint = false; encodeDefaults = true }
     private val rng = Random(config.seed.toLong())
     private var nextGenomeId = config.populationSize + 1
 
@@ -38,11 +52,27 @@ class EvolutionRunner(
         shouldStop = false
 
         try {
-            var population = List(config.populationSize) { i ->
-                randomGenome(id = i + 1, rng = rng)
+            var population: List<Genome>
+            var startGen = 0
+
+            if (initialCheckpoint != null) {
+                population = initialCheckpoint.genomes
+                startGen = initialCheckpoint.generation + 1
+                nextGenomeId = population.maxOf { it.id } + 1
+                for (i in population.indices) {
+                    val bd = initialCheckpoint.behaviorDescriptors.getOrNull(i)
+                    val fitness = initialCheckpoint.fitnesses.getOrNull(i) ?: 0f
+                    val bdPair = if (bd != null) Pair(bd.mobility, bd.aggression) else Pair(0.5f, 0.5f)
+                    archive.add(population[i], fitness, bdPair)
+                }
+                addLog("Resumed from checkpoint at generation ${initialCheckpoint.generation}")
+            } else {
+                population = List(config.populationSize) { i ->
+                    randomGenome(id = i + 1, rng = rng)
+                }
             }
 
-            for (gen in 0 until config.generations) {
+            for (gen in startGen until config.generations) {
                 if (shouldStop) {
                     addLog("Evolution stopped by user at generation $gen")
                     break
@@ -107,8 +137,14 @@ class EvolutionRunner(
                             BehaviorDescriptor(sg.behaviorDescriptor.first, sg.behaviorDescriptor.second)
                         },
                     )
-                    saveCheckpoint("data/checkpoints/gen_$gen.json", checkpointData)
+                    saveCheckpoint("$checkpointDir/gen_$gen.json", checkpointData)
                 }
+
+                if (config.showcaseInterval > 0 && gen % config.showcaseInterval == 0) {
+                    saveShowcaseReplays(gen)
+                }
+
+                onGenerationComplete?.invoke(gen)
             }
 
             if (!shouldStop) {
@@ -119,11 +155,63 @@ class EvolutionRunner(
         }
     }
 
+    private fun saveShowcaseReplays(gen: Int) {
+        if (replayDir == null) return
+        val allGenomes = archive.allGenomes().map { it.first }
+        if (allGenomes.isEmpty()) return
+
+        val batches = allGenomes.chunked(config.genomesPerMatch)
+        val genDir = File(replayDir, "gen_$gen")
+        genDir.mkdirs()
+
+        val matchEntries = mutableListOf<ReplayMatchEntry>()
+        val matchConfig = mapOf(
+            "width" to config.sampleMatchWidth,
+            "height" to config.sampleMatchHeight,
+            "tick_limit" to config.sampleMatchTickLimit,
+            "seed" to config.seed + gen * 10000,
+            "food_count" to config.foodCount,
+            "food_respawn_rate" to config.foodRespawnRate,
+        )
+
+        for ((i, batch) in batches.withIndex()) {
+            if (shouldStop) break
+            try {
+                val genomeDicts = batch.map { it.toDict() }
+                val frames: List<SimulationState> = bridge.runVisualizableMatch(matchConfig, genomeDicts)
+
+                val filename = "match_$i.json"
+                val framesJson = replayJson.encodeToString(ListSerializer(SimulationState.serializer()), frames)
+                File(genDir, filename).writeText(framesJson)
+
+                matchEntries.add(ReplayMatchEntry(
+                    matchIndex = i,
+                    filename = filename,
+                    genomeIds = batch.map { it.id },
+                    totalTicks = frames.size,
+                ))
+            } catch (e: Exception) {
+                addLog("Warning: showcase match $i failed: ${e.message}")
+            }
+        }
+
+        val index = ReplayIndex(
+            generation = gen,
+            gridWidth = config.sampleMatchWidth,
+            gridHeight = config.sampleMatchHeight,
+            tickLimit = config.sampleMatchTickLimit,
+            matches = matchEntries,
+        )
+        File(genDir, "index.json").writeText(replayJson.encodeToString(ReplayIndex.serializer(), index))
+        addLog("Saved ${matchEntries.size} showcase replays for gen $gen")
+    }
+
     private fun addLog(msg: String) {
         synchronized(_log) {
             _log.add(msg)
             if (_log.size > 500) _log.removeFirst()
         }
+        onLog?.invoke(msg)
     }
 
     fun getLog(): List<String> = synchronized(_log) { _log.toList() }
