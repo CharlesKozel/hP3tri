@@ -32,13 +32,16 @@ export default function NavBar() {
         }}>
             <span style={{color: '#555', marginRight: 8, fontSize: 14, fontWeight: 'bold'}}>hP3tri</span>
             <NavLink to={`/${hostQuery}`} end style={({isActive}) => isActive ? activeLinkStyle : linkStyle}>
-                Evolution
+                Tournament
             </NavLink>
             <NavLink to={`/match${hostQuery}`} style={({isActive}) => isActive ? activeLinkStyle : linkStyle}>
                 Match Viewer
             </NavLink>
             <NavLink to={`/queue${hostQuery}`} style={({isActive}) => isActive ? activeLinkStyle : linkStyle}>
                 Queue
+            </NavLink>
+            <NavLink to={`/evolution${hostQuery}`} style={({isActive}) => isActive ? activeLinkStyle : linkStyle}>
+                Evolution
             </NavLink>
             {host && <span style={{color: '#666', fontSize: 11, marginLeft: 'auto'}}>remote: {host}</span>}
         </nav>

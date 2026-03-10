@@ -56,6 +56,12 @@ export default function StatsPanel({organisms, currentTick, totalTicks, open, on
         return stats;
     }, [organisms]);
 
+    const genomeIndexMap = useMemo(() => {
+        const map = new Map<number, number>();
+        genomeStats.forEach((g, i) => map.set(g.genomeId, i));
+        return map;
+    }, [genomeStats]);
+
     return (
         <div style={{
             width: open ? 360 : 0,
@@ -111,9 +117,9 @@ export default function StatsPanel({organisms, currentTick, totalTicks, open, on
                                     width: 12,
                                     height: 12,
                                     borderRadius: 2,
-                                    background: GENOME_IDENTITIES[g.genomeId % GENOME_IDENTITIES.length].tint,
+                                    background: GENOME_IDENTITIES[(genomeIndexMap.get(g.genomeId) ?? 0) % GENOME_IDENTITIES.length].tint,
                                 }} />
-                                {GENOME_IDENTITIES[g.genomeId % GENOME_IDENTITIES.length].label} Genome {g.genomeId}
+                                {GENOME_IDENTITIES[(genomeIndexMap.get(g.genomeId) ?? 0) % GENOME_IDENTITIES.length].label} Genome {g.genomeId}
                             </span>
                             <span style={{color: '#999', fontWeight: 'normal'}}>
                                 {g.count} organism{g.count !== 1 ? 's' : ''}

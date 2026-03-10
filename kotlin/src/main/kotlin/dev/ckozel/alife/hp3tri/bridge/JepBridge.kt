@@ -17,7 +17,7 @@ class JepBridge(pythonSourceDir: String) {
             exec("sys.path.insert(0, '$pythonSourceDir')")
             exec("from simulator.sim_runner import run_simulation")
             exec("from simulator.cell_types import get_cell_type_metadata")
-            exec("from evolution.match_runner import run_evolution_match, run_visualizable_match")
+            exec("from evolution.match_runner import run_evolution_match, run_visualizable_match, run_genome_preview")
         }
     }
 
@@ -31,6 +31,9 @@ class JepBridge(pythonSourceDir: String) {
         val result = interpreter.getValue("_result") as List<Map<String, Any>>
         result.map { convertFrame(it) }
     }
+
+    @Suppress("UNCHECKED_CAST")
+    fun convertPreviewFrame(frame: Map<String, Any>): SimulationState = convertFrame(frame)
 
     @Suppress("UNCHECKED_CAST")
     private fun convertFrame(frame: Map<String, Any>): SimulationState {
@@ -98,6 +101,14 @@ class JepBridge(pythonSourceDir: String) {
         @Suppress("UNCHECKED_CAST")
         val result = interpreter.getValue("_vis_result") as List<Map<String, Any>>
         result.map { convertFrame(it) }
+    }
+
+    fun runGenomePreview(config: Map<String, Any>, genome: Map<String, Any>): Map<String, Any> = runOnJepThread {
+        interpreter.set("_preview_config", config)
+        interpreter.set("_preview_genome", genome)
+        interpreter.exec("_preview_result = run_genome_preview(dict(_preview_config), dict(_preview_genome))")
+        @Suppress("UNCHECKED_CAST")
+        interpreter.getValue("_preview_result") as Map<String, Any>
     }
 
     fun close() {

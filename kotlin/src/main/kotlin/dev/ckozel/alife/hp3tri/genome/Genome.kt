@@ -13,7 +13,10 @@ data class Genome(
     val offspringEnergy: Float,
     val growthDesire: Float,
     val movementWillingness: Float,
+    val seedCellType: Int = 1,
 )
+
+val VALID_SEED_CELL_TYPES: List<Int> = listOf(1, 2, 3, 4, 5, 7, 8, 9)
 
 fun Genome.toDict(): Map<String, Any> = mapOf(
     "id" to id,
@@ -25,4 +28,5 @@ fun Genome.toDict(): Map<String, Any> = mapOf(
     "offspring_energy" to offspringEnergy,
     "growth_desire" to growthDesire,
     "movement_willingness" to movementWillingness,
+    "seed_cell_type" to seedCellType,
 )

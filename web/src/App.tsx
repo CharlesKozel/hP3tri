@@ -3,6 +3,7 @@ import NavBar from './components/NavBar';
 import EvolutionDashboard from './pages/EvolutionDashboard';
 import MatchViewer from './pages/MatchViewer';
 import QueueDashboard from './pages/QueueDashboard';
+import TournamentDashboard from './pages/TournamentDashboard';
 
 export default function App() {
     return (
@@ -10,7 +11,8 @@ export default function App() {
             <div style={{width: '100vw', height: '100vh', background: '#111', display: 'flex', flexDirection: 'column'}}>
                 <NavBar/>
                 <Routes>
-                    <Route path="/" element={<EvolutionDashboard/>}/>
+                    <Route path="/" element={<TournamentDashboard/>}/>
+                    <Route path="/evolution" element={<EvolutionDashboard/>}/>
                     <Route path="/match" element={<MatchViewer/>}/>
                     <Route path="/queue" element={<QueueDashboard/>}/>
                 </Routes>

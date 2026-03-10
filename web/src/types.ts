@@ -48,7 +48,7 @@ export const TerrainType = {
 } as const;
 
 export const TERRAIN_COLORS: Record<number, string> = {
-  [TerrainType.GROUND]: '#2d5a1e',
+  [TerrainType.GROUND]: '#183210',
   [TerrainType.WATER]: '#1a4a7a',
   [TerrainType.ROCK]: '#4a4a4a',
   [TerrainType.FERTILE]: '#5a3a1a',
@@ -62,10 +62,10 @@ export interface GenomeIdentity {
 }
 
 export const GENOME_IDENTITIES: GenomeIdentity[] = [
-    { tint: '#4488ff', patternId: 0, label: '★' },
-    { tint: '#44cc44', patternId: 1, label: '☽' },
-    { tint: '#ff6644', patternId: 2, label: '◆' },
-    { tint: '#cc44ff', patternId: 3, label: '●' },
+    { tint: '#ff6644', patternId: 0, label: '★' },
+    { tint: '#cc44ff', patternId: 1, label: '☽' },
+    { tint: '#4488ff', patternId: 2, label: '◆' },
+    { tint: '#44cc44', patternId: 3, label: '●' },
     { tint: '#ffcc22', patternId: 4, label: '✚' },
 ];
 
@@ -117,4 +117,22 @@ export interface ReplayIndex {
     gridHeight: number;
     tickLimit: number;
     matches: ReplayMatchEntry[];
+}
+
+export interface EloLeaderboardEntry {
+    genomeId: number;
+    elo: number;
+    wins: number;
+    losses: number;
+    draws: number;
+    previewCellCount: number;
+    symmetryMode: number;
+}
+
+export interface EloHistoryEntry {
+    generation: number;
+    topElo: number;
+    avgElo: number;
+    medianElo: number;
+    matchesPlayed: number;
 }

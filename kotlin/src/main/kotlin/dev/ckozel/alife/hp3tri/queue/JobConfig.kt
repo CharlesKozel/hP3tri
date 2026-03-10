@@ -1,15 +1,26 @@
 package dev.ckozel.alife.hp3tri.queue
 
-import dev.ckozel.alife.hp3tri.evolution.EvolutionConfig
-import dev.ckozel.alife.hp3tri.evolution.EvolutionRunner
+import dev.ckozel.alife.hp3tri.evolution.EloTournamentConfig
 import kotlinx.serialization.Serializable
+
+interface JobRunner {
+    var shouldStop: Boolean
+    val running: Boolean
+    val currentGeneration: Int
+    val totalGenerations: Int
+    val matchesCompletedThisGen: Int
+    fun run()
+    fun getLog(): List<String>
+    fun bestMetric(): Float
+    fun progressMetric(): Float
+}
 
 @Serializable
 data class JobConfig(
     val name: String,
     val description: String = "",
     val priority: Int = 0,
-    val evolution: EvolutionConfig,
+    val tournament: EloTournamentConfig = EloTournamentConfig(),
     val seedCheckpoint: String? = null,
 )
 
@@ -31,7 +42,7 @@ data class RunStatus(
 data class ActiveRun(
     val runId: String,
     val jobConfig: JobConfig,
-    val runner: EvolutionRunner,
+    val runner: JobRunner,
     val startedAt: String,
     val logFile: java.io.File,
 )

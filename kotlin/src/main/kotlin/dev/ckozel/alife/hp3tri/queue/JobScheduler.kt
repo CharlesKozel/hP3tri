@@ -1,9 +1,7 @@
 package dev.ckozel.alife.hp3tri.queue
 
 import dev.ckozel.alife.hp3tri.bridge.JepBridge
-import dev.ckozel.alife.hp3tri.evolution.CheckpointData
-import dev.ckozel.alife.hp3tri.evolution.EvolutionRunner
-import dev.ckozel.alife.hp3tri.evolution.loadCheckpoint
+import dev.ckozel.alife.hp3tri.evolution.EloTournamentRunner
 import kotlinx.coroutines.*
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -77,7 +75,6 @@ class JobScheduler(private val bridge: JepBridge) {
     fun pauseCurrentRun() {
         val active = currentRun ?: return
         active.runner.shouldStop = true
-        // The polling loop will detect runner stopped and call finishRun with paused state
     }
 
     fun cancelCurrentRun() {
@@ -161,25 +158,22 @@ class JobScheduler(private val bridge: JepBridge) {
         val logFile = File(runDir, "log.txt")
         logFile.createNewFile()
 
-        val checkpoint: CheckpointData? = config.seedCheckpoint?.let { loadCheckpoint(it) }
-
         val replayDir = File(runDir, "replays")
-
         val startedAt = Instant.now().toString()
-        val runner = EvolutionRunner(
+
+        val runner = EloTournamentRunner(
             bridge = bridge,
-            config = config.evolution,
+            config = config.tournament,
             checkpointDir = checkpointDir.path,
             replayDir = replayDir.path,
-            initialCheckpoint = checkpoint,
             onLog = { msg ->
                 try {
                     logFile.appendText("$msg\n")
                 } catch (_: Exception) {}
             },
-            onGenerationComplete = { gen ->
+            onGenerationComplete = { _ ->
                 try {
-                    val active = currentRun ?: return@EvolutionRunner
+                    val active = currentRun ?: return@EloTournamentRunner
                     writeStatus(runDir, buildStatus(active, "running"))
                 } catch (_: Exception) {}
             },
@@ -216,7 +210,7 @@ class JobScheduler(private val bridge: JepBridge) {
         if (wasCancelled) return
 
         val wasPaused = active.runner.shouldStop &&
-                active.runner.currentGeneration < active.jobConfig.evolution.generations - 1
+                active.runner.currentGeneration < active.runner.totalGenerations - 1
 
         if (wasPaused) {
             val latestCheckpoint = findLatestCheckpoint(File(runDir, "checkpoints"))
@@ -264,9 +258,9 @@ class JobScheduler(private val bridge: JepBridge) {
             jobName = active.jobConfig.name,
             state = state,
             generation = active.runner.currentGeneration,
-            totalGenerations = active.jobConfig.evolution.generations,
-            bestFitness = active.runner.archive.bestFitness(),
-            archiveFillRate = active.runner.archive.fillRate(),
+            totalGenerations = active.runner.totalGenerations,
+            bestFitness = active.runner.bestMetric(),
+            archiveFillRate = active.runner.progressMetric(),
             matchesCompleted = active.runner.matchesCompletedThisGen,
             startedAt = active.startedAt,
             updatedAt = Instant.now().toString(),

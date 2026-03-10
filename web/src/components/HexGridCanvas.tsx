@@ -345,9 +345,16 @@ export default function HexGridCanvas({grid, organisms, cellTypes}: Props) {
             }
         }
 
+        // Assign sequential identity indices to genomes so two genomes never share a color
+        const genomeIndexMap = new Map<number, number>();
+        let nextIndex = 0;
+        for (const genomeId of genomePaths.keys()) {
+            genomeIndexMap.set(genomeId, nextIndex++);
+        }
+
         // Pass 3: Genome tint overlay
         for (const [genomeId, path] of genomePaths) {
-            const identity = GENOME_IDENTITIES[genomeId % GENOME_IDENTITIES.length];
+            const identity = GENOME_IDENTITIES[genomeIndexMap.get(genomeId)! % GENOME_IDENTITIES.length];
             ctx.save();
             ctx.globalAlpha = 0.2;
             ctx.fillStyle = identity.tint;
@@ -357,7 +364,7 @@ export default function HexGridCanvas({grid, organisms, cellTypes}: Props) {
 
         // Pass 4: Genome pattern overlay (screen-space, zoom-independent)
         for (const [genomeId, path] of genomePaths) {
-            const identity = GENOME_IDENTITIES[genomeId % GENOME_IDENTITIES.length];
+            const identity = GENOME_IDENTITIES[genomeIndexMap.get(genomeId)! % GENOME_IDENTITIES.length];
             const patternCanvas = patternCanvases[identity.patternId];
             if (!patternCanvas) continue;
 
@@ -386,7 +393,7 @@ export default function HexGridCanvas({grid, organisms, cellTypes}: Props) {
 
             const genomeId = genomeIdByOrgId.get(tile.organismId);
             if (genomeId === undefined) continue;
-            const identity = GENOME_IDENTITIES[genomeId % GENOME_IDENTITIES.length];
+            const identity = GENOME_IDENTITIES[(genomeIndexMap.get(genomeId) ?? genomeId) % GENOME_IDENTITIES.length];
 
             for (let i = 0; i < 6; i++) {
                 const [nq, nr] = wrapAxial(

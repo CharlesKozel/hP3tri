@@ -7,6 +7,7 @@ import dev.ckozel.alife.hp3tri.genome.mutate
 import dev.ckozel.alife.hp3tri.genome.randomGenome
 import dev.ckozel.alife.hp3tri.genome.toDict
 import dev.ckozel.alife.hp3tri.grid.SimulationState
+import dev.ckozel.alife.hp3tri.queue.JobRunner
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -20,18 +21,19 @@ class EvolutionRunner(
     val initialCheckpoint: CheckpointData? = null,
     val onLog: ((String) -> Unit)? = null,
     val onGenerationComplete: ((Int) -> Unit)? = null,
-) {
+) : JobRunner {
     private val replayJson = Json { prettyPrint = false; encodeDefaults = true }
     private val rng = Random(config.seed.toLong())
     private var nextGenomeId = config.populationSize + 1
 
     @Volatile
-    var shouldStop = false
+    override var shouldStop = false
 
-    var currentGeneration = 0
+    override var currentGeneration = 0
         private set
-    var matchesCompletedThisGen = 0
+    override var matchesCompletedThisGen = 0
         private set
+    override val totalGenerations: Int get() = config.generations
     private val _log = mutableListOf<String>()
     val historyEntries = mutableListOf<HistoryData>()
 
@@ -44,10 +46,10 @@ class EvolutionRunner(
         private set
 
     @Volatile
-    var running = false
+    override var running = false
         private set
 
-    fun run() {
+    override fun run() {
         running = true
         shouldStop = false
 
@@ -188,7 +190,7 @@ class EvolutionRunner(
                     matchIndex = i,
                     filename = filename,
                     genomeIds = batch.map { it.id },
-                    totalTicks = frames.size,
+                    totalTicks = config.sampleMatchTickLimit,
                 ))
             } catch (e: Exception) {
                 addLog("Warning: showcase match $i failed: ${e.message}")
@@ -214,7 +216,11 @@ class EvolutionRunner(
         onLog?.invoke(msg)
     }
 
-    fun getLog(): List<String> = synchronized(_log) { _log.toList() }
+    override fun getLog(): List<String> = synchronized(_log) { _log.toList() }
+
+    override fun bestMetric(): Float = archive.bestFitness()
+
+    override fun progressMetric(): Float = archive.fillRate()
 
     private fun generateNextPopulation(
         archive: MapElitesArchive,

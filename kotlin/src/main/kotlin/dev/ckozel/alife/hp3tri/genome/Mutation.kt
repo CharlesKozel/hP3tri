@@ -27,6 +27,9 @@ fun mutate(genome: Genome, rng: Random): Genome {
         offspringEnergy = mutateMetabolic(genome.offspringEnergy, rng),
         growthDesire = mutateMetabolic(genome.growthDesire, rng),
         movementWillingness = mutateMetabolic(genome.movementWillingness, rng),
+        seedCellType = if (rng.nextFloat() < 0.05f)
+            VALID_SEED_CELL_TYPES[rng.nextInt(VALID_SEED_CELL_TYPES.size)]
+        else genome.seedCellType,
     )
 }
 
@@ -53,6 +56,7 @@ fun crossover(a: Genome, b: Genome, nextId: Int, rng: Random): Genome {
         offspringEnergy = (a.offspringEnergy + b.offspringEnergy) / 2f,
         growthDesire = (a.growthDesire + b.growthDesire) / 2f,
         movementWillingness = (a.movementWillingness + b.movementWillingness) / 2f,
+        seedCellType = if (rng.nextBoolean()) a.seedCellType else b.seedCellType,
     )
 }
 

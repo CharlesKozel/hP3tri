@@ -25,13 +25,111 @@ def _get_engine(width: int, height: int, seed: int) -> SimulationEngine:
     return _cached_engine
 
 
-def run_evolution_match(
+def _setup_genome(
+    engine: SimulationEngine,
+    genome_dict: dict[str, Any],
+) -> tuple[int, CppnBodyPlan, RuleBrain, int]:
+    """Register a genome's body plan, brain, and template with the engine.
+
+    Returns (genome_id, body_plan, brain, seed_cell_type).
+    """
+    gid = int(genome_dict["id"])
+    weights = np.array(genome_dict["cppn_weights"], dtype=np.float32)
+    activations = np.array(genome_dict["cppn_activations"], dtype=np.int32)
+    symmetry = int(genome_dict.get("symmetry_mode", 1))
+    brain_params = np.array(genome_dict["brain_params"], dtype=np.float32)
+
+    body_plan = CppnBodyPlan(weights, activations, symmetry)
+    brain = RuleBrain(brain_params)
+
+    engine.set_genome_brain_params(gid, brain_params)
+
+    template = body_plan.generate_template(dev_time=0.0)
+    genome_data: dict[str, Any] = {"body_template": template}
+    engine.genome_registry[gid] = genome_data
+
+    seed_cell_type = int(genome_dict.get("seed_cell_type", int(CellType.SOFT_TISSUE)))
+
+    return gid, body_plan, brain, seed_cell_type
+
+
+def _find_empty_cell(
+    engine: SimulationEngine,
+    rng: np.random.Generator,
+    margin: int = 4,
+    max_attempts: int = 200,
+) -> tuple[int, int] | None:
+    """Find a random empty tile within the grid (with margin from edges)."""
+    ct_np = engine.grid.cell_type.to_numpy()
+    oid_np = engine.grid.organism_id.to_numpy()
+    for _ in range(max_attempts):
+        q = int(rng.integers(margin, engine.width - margin))
+        r = int(rng.integers(margin, engine.height - margin))
+        idx = r * engine.width + q
+        if int(ct_np[idx]) == 0 and int(oid_np[idx]) == 0:
+            return q, r
+    return None
+
+
+def _place_seeds(
+    engine: SimulationEngine,
+    genome_infos: list[tuple[int, CppnBodyPlan, RuleBrain, int]],
+    population_size: int,
+    rng: np.random.Generator,
+) -> dict[int, list[int]] | str:
+    """Place population_size seed organisms per genome, alternating 1-by-1.
+
+    Returns org_ids_by_genome on success, or an error string on failure.
+    """
+    total_needed = population_size * len(genome_infos)
+    usable_area = (engine.width - 8) * (engine.height - 8)
+    if total_needed > usable_area:
+        return (
+            f"Cannot place {total_needed} organisms "
+            f"in {usable_area} usable tiles"
+        )
+
+    org_ids_by_genome: dict[int, list[int]] = {}
+    for gid, _, _, _ in genome_infos:
+        org_ids_by_genome[gid] = []
+
+    for _ in range(population_size):
+        for gid, body_plan, brain, seed_cell_type in genome_infos:
+            pos = _find_empty_cell(engine, rng)
+            if pos is None:
+                return (
+                    f"Failed to place organism for genome {gid}: "
+                    f"grid too crowded after {len(org_ids_by_genome[gid])} placements"
+                )
+            q, r = pos
+
+            org_id = engine.create_organism(
+                seed_q=q, seed_r=r,
+                seed_cell_type=seed_cell_type,
+                starting_energy=800,
+                genome_id=gid,
+                brain=brain,
+                body_plan=body_plan,
+            )
+
+            genome_data = engine.genome_registry[gid]
+            genome_data["origin_q"] = q
+            genome_data["origin_r"] = r
+
+            org_ids_by_genome[gid].append(org_id)
+
+    return org_ids_by_genome
+
+
+def _run_match(
     config: dict[str, Any],
     genome_dicts: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Run a single evolution match and return per-genome results.
+    snapshot_interval: int = 0,
+) -> tuple[SimulationEngine, list[int], list[dict] | None, str | None]:
+    """Core match runner shared by evolution and visualization paths.
 
-    Called from Kotlin via Jep.
+    Returns (engine, genome_ids, replay_frames_or_None, error_or_None).
+    snapshot_interval=0 disables replay recording.
     """
     width: int = config.get("width", 64)
     height: int = config.get("height", 64)
@@ -40,75 +138,62 @@ def run_evolution_match(
     food_count: int = config.get("food_count", 80)
     food_respawn_rate: int = config.get("food_respawn_rate", 5)
     food_respawn_interval: int = config.get("food_respawn_interval", 20)
+    population_size: int = config.get("population_size", 1)
 
     rng = np.random.default_rng(seed)
     engine = _get_engine(width, height, seed)
 
-    genome_id_to_genome: dict[int, dict[str, Any]] = {}
-    org_ids_by_genome: dict[int, list[int]] = {}
-
+    genome_infos: list[tuple[int, CppnBodyPlan, RuleBrain, int]] = []
+    genome_ids: list[int] = []
     for genome_dict in genome_dicts:
-        gid = int(genome_dict["id"])
-        genome_id_to_genome[gid] = genome_dict
+        gid, body_plan, brain, seed_ct = _setup_genome(engine, genome_dict)
+        genome_infos.append((gid, body_plan, brain, seed_ct))
+        genome_ids.append(gid)
 
-        weights = np.array(genome_dict["cppn_weights"], dtype=np.float32)
-        activations = np.array(genome_dict["cppn_activations"], dtype=np.int32)
-        symmetry = int(genome_dict.get("symmetry_mode", 1))
-        brain_params = np.array(genome_dict["brain_params"], dtype=np.float32)
-
-        body_plan = CppnBodyPlan(weights, activations, symmetry)
-        brain = RuleBrain(brain_params)
-
-        # Load genome-specific brain params into the GPU Taichi field
-        engine.set_genome_brain_params(gid, brain_params)
-
-        template = body_plan.generate_template(dev_time=0.0)
-
-        genome_data: dict[str, Any] = {
-            "body_template": template,
-        }
-        engine.genome_registry[gid] = genome_data
-
-        q = int(rng.integers(4, width - 4))
-        r = int(rng.integers(4, height - 4))
-
-        org_id = engine.create_organism(
-            seed_q=q, seed_r=r,
-            seed_cell_type=int(CellType.SOFT_TISSUE),
-            starting_energy=800,
-            genome_id=gid,
-            brain=brain,
-            body_plan=body_plan,
-        )
-
-        # Place starter PHOTOSYNTHETIC cells so organism has energy generation
-        _place_starter_cells(engine, org_id, q, r, width, height)
-
-        genome_data["origin_q"] = q
-        genome_data["origin_r"] = r
-
-        org_ids_by_genome.setdefault(gid, []).append(org_id)
+    result = _place_seeds(engine, genome_infos, population_size, rng)
+    if isinstance(result, str):
+        return engine, genome_ids, None, result
 
     _place_food(engine, food_count, rng)
 
-    engine.recompute_aggregates()
+    replay: list[dict] | None = None
+    if snapshot_interval > 0:
+        replay = []
+        engine.recompute_aggregates()
+        replay.append(engine.snapshot())
+    else:
+        engine.recompute_aggregates()
+
     for tick in range(tick_limit):
         engine.step()
+
+        if replay is not None and (tick % snapshot_interval == 0 or tick == tick_limit - 1):
+            replay.append(engine.snapshot())
 
         if food_respawn_interval > 0 and tick > 0 and tick % food_respawn_interval == 0:
             _place_food(engine, food_respawn_rate, rng)
 
+    return engine, genome_ids, replay, None
+
+
+def run_evolution_match(
+    config: dict[str, Any],
+    genome_dicts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    engine, genome_ids, _, error = _run_match(config, genome_dicts)
+    if error is not None:
+        return [{"error": error}]
+
     results: list[dict[str, Any]] = []
-    for gid, genome_dict in genome_id_to_genome.items():
+    for gid in genome_ids:
         final_cells = _count_genome_cells(engine, gid)
         final_energy = _sum_genome_energy(engine, gid)
-        survived = final_cells > 0
         mobility, aggression = _compute_behavior_descriptors(engine, gid)
 
         results.append({
             "genome_id": gid,
             "final_cell_count": final_cells,
-            "survived": survived,
+            "survived": final_cells > 0,
             "peak_cell_count": final_cells,
             "final_energy": final_energy,
             "mobility": float(mobility),
@@ -122,102 +207,9 @@ def run_visualizable_match(
     config: dict[str, Any],
     genome_dicts: list[dict[str, Any]],
 ) -> list[dict]:
-    """Run a match and return sampled replay frames for visualization.
-
-    Snapshots every snapshot_interval ticks to reduce GPU-CPU transfer overhead.
-    """
-    width: int = config.get("width", 64)
-    height: int = config.get("height", 64)
-    tick_limit: int = config.get("tick_limit", 200)
-    seed: int = config.get("seed", 42)
-    food_count: int = config.get("food_count", 40)
-    food_respawn_rate: int = config.get("food_respawn_rate", 3)
-    food_respawn_interval: int = config.get("food_respawn_interval", 20)
     snapshot_interval: int = config.get("snapshot_interval", 3)
-
-    rng = np.random.default_rng(seed)
-    engine = _get_engine(width, height, seed)
-
-    for genome_dict in genome_dicts:
-        gid = int(genome_dict["id"])
-
-        weights = np.array(genome_dict["cppn_weights"], dtype=np.float32)
-        activations = np.array(genome_dict["cppn_activations"], dtype=np.int32)
-        symmetry = int(genome_dict.get("symmetry_mode", 1))
-        brain_params = np.array(genome_dict["brain_params"], dtype=np.float32)
-
-        body_plan = CppnBodyPlan(weights, activations, symmetry)
-        brain = RuleBrain(brain_params)
-
-        # Load genome-specific brain params into the GPU Taichi field
-        engine.set_genome_brain_params(gid, brain_params)
-
-        template = body_plan.generate_template(dev_time=0.0)
-        genome_data: dict[str, Any] = {"body_template": template}
-        engine.genome_registry[gid] = genome_data
-
-        q = int(rng.integers(4, width - 4))
-        r = int(rng.integers(4, height - 4))
-        seed_ct = int(CellType.SOFT_TISSUE)
-
-        engine.create_organism(
-            seed_q=q, seed_r=r,
-            seed_cell_type=seed_ct,
-            starting_energy=800,
-            genome_id=gid,
-            brain=brain,
-            body_plan=body_plan,
-        )
-
-        _place_starter_cells(engine, engine.next_org_id - 1, q, r, width, height)
-
-        genome_data["origin_q"] = q
-        genome_data["origin_r"] = r
-
-    _place_food(engine, food_count, rng)
-
-    replay: list[dict] = []
-    engine.recompute_aggregates()
-    replay.append(engine.snapshot())
-
-    for tick in range(tick_limit):
-        engine.step()
-
-        if tick % snapshot_interval == 0 or tick == tick_limit - 1:
-            replay.append(engine.snapshot())
-
-        if food_respawn_interval > 0 and tick > 0 and tick % food_respawn_interval == 0:
-            _place_food(engine, food_respawn_rate, rng)
-
-    return replay
-
-
-def _place_starter_cells(
-    engine: SimulationEngine,
-    org_id: int,
-    center_q: int,
-    center_r: int,
-    width: int,
-    height: int,
-) -> None:
-    """Place PHOTOSYNTHETIC + MOUTH cells around the seed to bootstrap viability."""
-    from simulator.hex_grid import NEIGHBOR_OFFSETS
-    starter_types = [
-        int(CellType.PHOTOSYNTHETIC),
-        int(CellType.PHOTOSYNTHETIC),
-        int(CellType.PHOTOSYNTHETIC),
-        int(CellType.MOUTH),
-    ]
-    placed = 0
-    for dq, dr in NEIGHBOR_OFFSETS:
-        if placed >= len(starter_types):
-            break
-        nq = (center_q + dq) % width
-        nr = (center_r + dr) % height
-        idx = nr * width + nq
-        if int(engine.grid[idx].cell_type) == 0:
-            engine.place_cell(org_id, nq, nr, starter_types[placed])
-            placed += 1
+    _, _, replay, _ = _run_match(config, genome_dicts, snapshot_interval)
+    return replay if replay is not None else []
 
 
 def _place_food(engine: SimulationEngine, count: int, rng: np.random.Generator) -> None:
@@ -281,3 +273,70 @@ def _compute_behavior_descriptors(
     mobility = min(total_locomotion / total_mass, 1.0)
     aggression = min(total_mouth_spike / total_cells, 1.0)
     return mobility, aggression
+
+
+def run_genome_preview(
+    config: dict[str, Any],
+    genome_dict: dict[str, Any],
+) -> dict[str, Any]:
+    """Run a single genome in isolation to visualize its growth pattern."""
+    width: int = config.get("width", 128)
+    height: int = config.get("height", 128)
+    tick_limit: int = config.get("tick_limit", 100)
+    seed: int = config.get("seed", 42)
+
+    engine = _get_engine(width, height, seed)
+
+    gid, body_plan, brain, seed_cell_type = _setup_genome(engine, genome_dict)
+
+    # Suppress reproduction for preview
+    brain_params = np.array(genome_dict["brain_params"], dtype=np.float32).copy()
+    brain_params[4] = 2.0
+    engine.set_genome_brain_params(gid, brain_params)
+
+    center_q = width // 2
+    center_r = height // 2
+
+    org_id = engine.create_organism(
+        seed_q=center_q, seed_r=center_r,
+        seed_cell_type=seed_cell_type,
+        starting_energy=999999,
+        genome_id=gid,
+        brain=brain,
+        body_plan=body_plan,
+    )
+
+    genome_data = engine.genome_registry[gid]
+    genome_data["origin_q"] = center_q
+    genome_data["origin_r"] = center_r
+
+    snapshot_ticks: list[int] = [
+        tick_limit // 4,
+        tick_limit // 2,
+        (tick_limit * 3) // 4,
+        tick_limit - 1,
+    ]
+
+    snapshots: list[dict] = []
+    engine.recompute_aggregates()
+
+    for tick in range(tick_limit):
+        engine.step()
+        if tick in snapshot_ticks:
+            snapshots.append(engine.snapshot())
+
+    final_cells = _count_genome_cells(engine, gid)
+
+    return {
+        "final_snapshot": snapshots[-1] if snapshots else engine.snapshot(),
+        "snapshots": snapshots,
+        "final_cell_count": final_cells,
+        "survived": final_cells > 0,
+    }
+
+
+def run_genome_previews_batch(
+    config: dict[str, Any],
+    genome_dicts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [run_genome_preview(config, gd) for gd in genome_dicts]

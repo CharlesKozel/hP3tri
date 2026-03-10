@@ -27,6 +27,7 @@ export default function MatchViewer() {
             const gen = searchParams.get('gen');
             const matchIdx = searchParams.get('match');
             const genomes = searchParams.get('genomes');
+            const tournamentMatch = searchParams.get('tournament_match');
 
             let replayPromise: Promise<Response>;
             let infoPromise: Promise<Response>;
@@ -34,6 +35,14 @@ export default function MatchViewer() {
             if (runId && gen !== null && matchIdx !== null) {
                 const url = `${base}/api/queue/runs/${encodeURIComponent(runId)}/replays/${gen}/${matchIdx}`;
                 replayPromise = fetch(url);
+                infoPromise = replayPromise.then(res => res.clone());
+            } else if (tournamentMatch) {
+                const genomeIds = tournamentMatch.split(',').map(Number).filter(n => !isNaN(n));
+                replayPromise = fetch(`${base}/api/tournament/run-match`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({genomeIds, gridWidth: 64, gridHeight: 64, tickLimit: 200}),
+                });
                 infoPromise = replayPromise.then(res => res.clone());
             } else if (genomes) {
                 const genomeIds = genomes.split(',').map(Number).filter(n => !isNaN(n));
@@ -53,14 +62,14 @@ export default function MatchViewer() {
             const types: CellTypeInfo[] = await cellTypesRes.json();
             setCellTypes(types);
 
-            if (runId || genomes) {
+            if (runId || genomes || tournamentMatch) {
                 const replayRes = await replayPromise;
                 if (!replayRes.ok) throw new Error(`HTTP ${replayRes.status}`);
                 const data = await replayRes.json();
                 const frames: SimulationState[] = data.frames;
                 setReplay(frames);
                 setReplayInfo({
-                    totalTicks: frames.length - 1,
+                    totalTicks: frames[frames.length - 1]?.tick ?? frames.length - 1,
                     width: frames[0]?.grid?.width ?? 64,
                     height: frames[0]?.grid?.height ?? 64,
                 });
@@ -172,7 +181,7 @@ export default function MatchViewer() {
                     flexShrink: 0,
                     flexWrap: 'wrap',
                 }}>
-                    <span>Tick: {currentTick}/{replayInfo.totalTicks}</span>
+                    <span>Tick: {frame?.tick ?? currentTick}/{replayInfo.totalTicks}</span>
                     <span style={{color: frame?.status === 'RUNNING' ? '#4c4' : '#c44'}}>
                         {frame?.status}
                     </span>
@@ -227,7 +236,7 @@ export default function MatchViewer() {
             </div>
             <StatsPanel
                 organisms={frame?.organisms ?? []}
-                currentTick={currentTick}
+                currentTick={frame?.tick ?? currentTick}
                 totalTicks={replayInfo.totalTicks}
                 open={statsOpen}
                 onClose={() => setStatsOpen(false)}

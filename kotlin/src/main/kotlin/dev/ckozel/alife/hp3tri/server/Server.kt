@@ -1,6 +1,7 @@
 package dev.ckozel.alife.hp3tri.server
 
 import dev.ckozel.alife.hp3tri.bridge.JepBridge
+import dev.ckozel.alife.hp3tri.evolution.EloTournamentRunner
 import dev.ckozel.alife.hp3tri.genome.toDict
 import dev.ckozel.alife.hp3tri.queue.CurrentRunResponse
 import dev.ckozel.alife.hp3tri.queue.JobConfig
@@ -42,22 +43,23 @@ data class EvolutionStatusResponse(
 )
 
 @Serializable
-data class ArchiveEntryResponse(
-    val binX: Int,
-    val binY: Int,
+data class EloLeaderboardEntry(
     val genomeId: Int,
-    val fitness: Float,
-    val mobility: Float,
-    val aggression: Float,
+    val elo: Float,
+    val wins: Int,
+    val losses: Int,
+    val draws: Int,
+    val previewCellCount: Int,
     val symmetryMode: Int,
 )
 
 @Serializable
-data class HistoryEntryResponse(
+data class EloHistoryResponse(
     val generation: Int,
-    val bestFitness: Float,
-    val avgFitness: Float,
-    val fillRate: Float,
+    val topElo: Float,
+    val avgElo: Float,
+    val medianElo: Float,
+    val matchesPlayed: Int,
 )
 
 @Serializable
@@ -124,14 +126,9 @@ fun startServer(bridge: JepBridge, port: Int = 8080) {
                 call.respond(ReplayInfo(simulation.totalTicks, simulation.width, simulation.height))
             }
 
-            // Evolution routes — delegate to scheduler's current run
+            // Evolution status — works for tournament runner
             post("/api/evolution/start") {
-                val active = scheduler.currentRun
-                if (active != null && active.runner.running) {
-                    call.respond(HttpStatusCode.Conflict, "Evolution already running")
-                    return@post
-                }
-                call.respond(HttpStatusCode.BadRequest, "Use /api/queue/submit to start evolution runs")
+                call.respond(HttpStatusCode.BadRequest, "Use /api/queue/submit to start tournament runs")
             }
 
             post("/api/evolution/stop") {
@@ -146,73 +143,96 @@ fun startServer(bridge: JepBridge, port: Int = 8080) {
 
             get("/api/evolution/status") {
                 val runner = scheduler.currentRun?.runner
-                val config = scheduler.currentRun?.jobConfig?.evolution
                 val status = EvolutionStatusResponse(
                     running = runner?.running ?: false,
                     generation = runner?.currentGeneration ?: 0,
-                    totalGenerations = config?.generations ?: 0,
-                    archiveFillRate = runner?.archive?.fillRate() ?: 0f,
-                    bestFitness = runner?.archive?.bestFitness() ?: 0f,
+                    totalGenerations = runner?.totalGenerations ?: 0,
+                    archiveFillRate = runner?.progressMetric() ?: 0f,
+                    bestFitness = runner?.bestMetric() ?: 0f,
                     matchesCompleted = runner?.matchesCompletedThisGen ?: 0,
                     log = runner?.getLog() ?: emptyList(),
                 )
                 call.respond(status)
             }
 
-            get("/api/evolution/archive") {
+            // Tournament leaderboard
+            get("/api/tournament/leaderboard") {
                 val runner = scheduler.currentRun?.runner
-                if (runner == null) {
-                    call.respond(emptyList<ArchiveEntryResponse>())
+                if (runner == null || runner !is EloTournamentRunner) {
+                    call.respond(emptyList<EloLeaderboardEntry>())
                     return@get
                 }
-                val entries = runner.archive.allEntries().map { entry ->
-                    ArchiveEntryResponse(
-                        binX = entry.binX,
-                        binY = entry.binY,
+                val entries = runner.getLeaderboard().map { entry ->
+                    EloLeaderboardEntry(
                         genomeId = entry.genome.id,
-                        fitness = entry.fitness,
-                        mobility = entry.genome.movementWillingness,
-                        aggression = entry.genome.brainParams.getOrElse(0) { 0f },
+                        elo = entry.elo,
+                        wins = entry.wins,
+                        losses = entry.losses,
+                        draws = entry.draws,
+                        previewCellCount = entry.previewCellCount,
                         symmetryMode = entry.genome.symmetryMode,
                     )
                 }
                 call.respond(entries)
             }
 
-            get("/api/evolution/history") {
+            // Tournament ELO history
+            get("/api/tournament/history") {
                 val runner = scheduler.currentRun?.runner
-                if (runner == null) {
-                    call.respond(emptyList<HistoryEntryResponse>())
+                if (runner == null || runner !is EloTournamentRunner) {
+                    call.respond(emptyList<EloHistoryResponse>())
                     return@get
                 }
                 val entries = runner.historyEntries.map { h ->
-                    HistoryEntryResponse(
+                    EloHistoryResponse(
                         generation = h.generation,
-                        bestFitness = h.bestFitness,
-                        avgFitness = h.avgFitness,
-                        fillRate = h.fillRate,
+                        topElo = h.topElo,
+                        avgElo = h.avgElo,
+                        medianElo = h.medianElo,
+                        matchesPlayed = h.matchesPlayed,
                     )
                 }
                 call.respond(entries)
             }
 
-            post("/api/evolution/run-match") {
+            // Preview snapshot for a genome in the current tournament
+            get("/api/tournament/preview/{genomeId}") {
+                val genomeId = call.parameters["genomeId"]?.toIntOrNull()
+                if (genomeId == null) {
+                    call.respond(HttpStatusCode.BadRequest, "Invalid genomeId")
+                    return@get
+                }
+                val runner = scheduler.currentRun?.runner
+                if (runner == null || runner !is EloTournamentRunner) {
+                    call.respond(HttpStatusCode.NotFound, "No tournament running")
+                    return@get
+                }
+                val preview = runner.getPreview(genomeId)
+                if (preview == null) {
+                    call.respond(HttpStatusCode.NotFound, "No preview for genome $genomeId")
+                    return@get
+                }
+                call.respond(preview)
+            }
+
+            // Run a 1v1 match between two genomes from the tournament
+            post("/api/tournament/run-match") {
                 val request = call.receive<RunMatchRequest>()
                 val runner = scheduler.currentRun?.runner
-                if (runner == null) {
-                    call.respond(HttpStatusCode.BadRequest, "No evolution data available. Start evolution first.")
+                if (runner == null || runner !is EloTournamentRunner) {
+                    call.respond(HttpStatusCode.BadRequest, "No tournament data available")
                     return@post
                 }
                 if (runner.running) {
-                    call.respond(HttpStatusCode.Conflict, "Cannot run sample match while evolution is running. Stop evolution first.")
+                    call.respond(HttpStatusCode.Conflict, "Cannot run sample match while tournament is running")
                     return@post
                 }
 
                 val genomes = request.genomeIds.mapNotNull { id ->
-                    runner.archive.getGenomeById(id)
+                    runner.getGenomeById(id)
                 }
                 if (genomes.isEmpty()) {
-                    call.respond(HttpStatusCode.NotFound, "No matching genomes found in archive")
+                    call.respond(HttpStatusCode.NotFound, "No matching genomes found")
                     return@post
                 }
 
@@ -225,7 +245,6 @@ fun startServer(bridge: JepBridge, port: Int = 8080) {
                     "food_respawn_rate" to 3,
                 )
                 val genomeDicts = genomes.map { it.toDict() }
-
                 val frames = bridge.runVisualizableMatch(matchConfig, genomeDicts)
                 call.respond(mapOf("frames" to frames))
             }
@@ -318,9 +337,9 @@ fun startServer(bridge: JepBridge, port: Int = 8080) {
                     jobName = active.jobConfig.name,
                     state = "running",
                     generation = active.runner.currentGeneration,
-                    totalGenerations = active.jobConfig.evolution.generations,
-                    bestFitness = active.runner.archive.bestFitness(),
-                    archiveFillRate = active.runner.archive.fillRate(),
+                    totalGenerations = active.runner.totalGenerations,
+                    bestFitness = active.runner.bestMetric(),
+                    archiveFillRate = active.runner.progressMetric(),
                     matchesCompleted = active.runner.matchesCompletedThisGen,
                 ))
             }
