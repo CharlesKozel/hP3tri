@@ -58,12 +58,7 @@ interface JobForm {
     matchTickLimit: number;
     previewTickLimit: number;
     previewGridSize: number;
-    foodCount: number;
-    foodRespawnRate: number;
-    kFactor: number;
     seed: number;
-    showcaseInterval: number;
-    saveTopMatchReplays: number;
 }
 
 const DEFAULT_FORM: JobForm = {
@@ -79,12 +74,7 @@ const DEFAULT_FORM: JobForm = {
     matchTickLimit: 500,
     previewTickLimit: 100,
     previewGridSize: 128,
-    foodCount: 80,
-    foodRespawnRate: 5,
-    kFactor: 32,
     seed: 42,
-    showcaseInterval: 1,
-    saveTopMatchReplays: 5,
 };
 
 export default function QueueDashboard() {
@@ -155,12 +145,7 @@ export default function QueueDashboard() {
                     matchTickLimit: form.matchTickLimit,
                     previewTickLimit: form.previewTickLimit,
                     previewGridSize: form.previewGridSize,
-                    foodCount: form.foodCount,
-                    foodRespawnRate: form.foodRespawnRate,
-                    kFactor: form.kFactor,
                     seed: form.seed,
-                    showcaseInterval: form.showcaseInterval,
-                    saveTopMatchReplays: form.saveTopMatchReplays,
                 },
             };
             const res = await fetch(`${base}/api/queue/submit`, {
@@ -299,7 +284,6 @@ export default function QueueDashboard() {
                             <Field label="Seeds/Genome" value={form.matchPopulationSize} onChange={v => updateField('matchPopulationSize', parseInt(v) || 0)} width={80} type="number"/>
                             <Field label="Generations" value={form.generations} onChange={v => updateField('generations', parseInt(v) || 0)} width={70} type="number"/>
                             <Field label="Matches/Gen" value={form.matchesPerGeneration} onChange={v => updateField('matchesPerGeneration', parseInt(v) || 0)} width={80} type="number"/>
-                            <Field label="K Factor" value={form.kFactor} onChange={v => updateField('kFactor', parseInt(v) || 0)} width={60} type="number"/>
                         </div>
                         <div style={{display: 'flex', gap: 10, flexWrap: 'wrap'}}>
                             <Field label="Grid W" value={form.gridWidth} onChange={v => updateField('gridWidth', parseInt(v) || 0)} width={60} type="number"/>
@@ -307,13 +291,7 @@ export default function QueueDashboard() {
                             <Field label="Match Ticks" value={form.matchTickLimit} onChange={v => updateField('matchTickLimit', parseInt(v) || 0)} width={80} type="number"/>
                             <Field label="Preview Ticks" value={form.previewTickLimit} onChange={v => updateField('previewTickLimit', parseInt(v) || 0)} width={80} type="number"/>
                             <Field label="Preview Grid" value={form.previewGridSize} onChange={v => updateField('previewGridSize', parseInt(v) || 0)} width={80} type="number"/>
-                        </div>
-                        <div style={{display: 'flex', gap: 10, flexWrap: 'wrap'}}>
-                            <Field label="Food" value={form.foodCount} onChange={v => updateField('foodCount', parseInt(v) || 0)} width={60} type="number"/>
-                            <Field label="Food Respawn" value={form.foodRespawnRate} onChange={v => updateField('foodRespawnRate', parseInt(v) || 0)} width={80} type="number"/>
                             <Field label="Seed" value={form.seed} onChange={v => updateField('seed', parseInt(v) || 0)} width={70} type="number"/>
-                            <Field label="Showcase Int." value={form.showcaseInterval} onChange={v => updateField('showcaseInterval', parseInt(v) || 0)} width={80} type="number"/>
-                            <Field label="Top Replays" value={form.saveTopMatchReplays} onChange={v => updateField('saveTopMatchReplays', parseInt(v) || 0)} width={80} type="number"/>
                         </div>
                         <div>
                             <button type="submit" style={btnStyle('#1a5a2a', '#2a8a4a')}>Submit Job</button>
