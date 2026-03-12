@@ -43,15 +43,15 @@ class CellProps:
 
 CELL_PROPERTIES: dict[CellType, CellProps] = {
     CellType.NULL:           CellProps(0,  0,  0, 0,  0, 0,  '#000000', 'Empty'),
-    CellType.SOFT_TISSUE:    CellProps(1,  2,  1, 0,  0, 1,  '#e8b4a0', 'Soft Tissue', vision_range=1, can_reproduce=1),
-    CellType.MOUTH:          CellProps(2,  8,  3, 0,  0, 4,  '#cc3333', 'Mouth', vision_range=1, action_rank=4, can_reproduce=1),
-    CellType.FLAGELLA:       CellProps(1,  4,  1, 10, 0, 4,  '#cc88dd', 'Flagella', vision_range=1, can_reproduce=1),
+    CellType.SOFT_TISSUE:    CellProps(1,  2,  1, 0,  0, 1,  '#e8b4a0', 'Soft Tissue', can_reproduce=1),
+    CellType.MOUTH:          CellProps(2,  8,  3, 0,  0, 4,  '#cc3333', 'Mouth', action_rank=4, can_reproduce=1),
+    CellType.FLAGELLA:       CellProps(1,  4,  1, 10, 0, 4,  '#cc88dd', 'Flagella', can_reproduce=1),
     CellType.EYE:            CellProps(2,  6,  2, 0,  0, 3,  '#ffffff', 'Eye', vision_range=5, vision_expansion=1, directional=1),
     CellType.SPIKE:          CellProps(3, 12,  4, 0,  0, 6,  '#ff6600', 'Spike', action_rank=3),
     CellType.FOOD:           CellProps(0, 10,  5, 0,  0, 10, '#66dd66', 'Food'),
     CellType.PHOTOSYNTHETIC: CellProps(1,  5,  2, 0,  3, 3,  '#33aa33', 'Photosynthetic', can_reproduce=1),
     CellType.ARMOR:          CellProps(1, 15,  6, 0,  0, 0,  '#8888aa', 'Armor'),
-    CellType.SKIN:           CellProps(1,  3,  2, 0,  0, 1,  '#ddbb88', 'Skin', can_reproduce=1),
+    CellType.SKIN:           CellProps(1,  3,  2, 0,  0, 1,  '#ddbb88', 'Skin', vision_range=1, can_reproduce=1),
 }
 
 

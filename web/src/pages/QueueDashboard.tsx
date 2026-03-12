@@ -15,6 +15,31 @@ interface PendingJob {
     };
 }
 
+interface TournamentConfig {
+    populationSize: number;
+    matchPopulationSize: number;
+    generations: number;
+    matchesPerGeneration: number;
+    gridWidth: number;
+    gridHeight: number;
+    matchTickLimit: number;
+    previewTickLimit: number;
+    previewGridSize: number;
+    foodCount: number;
+    foodRespawnRate: number;
+    kFactor: number;
+    seed: number;
+    showcaseInterval: number;
+    saveTopMatchReplays: number;
+}
+
+interface RunJobConfig {
+    name: string;
+    description: string;
+    priority: number;
+    tournament: TournamentConfig;
+}
+
 interface RunStatus {
     jobName: string;
     state: string;
@@ -27,6 +52,7 @@ interface RunStatus {
     updatedAt: string;
     error: string | null;
     hasReplays: boolean;
+    config: RunJobConfig | null;
 }
 
 interface RunSummary {
@@ -71,20 +97,20 @@ const DEFAULT_FORM: JobForm = {
     description: '',
     priority: 0,
     populationSize: 100,
-    matchPopulationSize: 1,
+    matchPopulationSize: 5,
     generations: 10,
     matchesPerGeneration: 500,
     gridWidth: 64,
     gridHeight: 64,
-    matchTickLimit: 500,
+    matchTickLimit: 100,
     previewTickLimit: 100,
-    previewGridSize: 128,
+    previewGridSize: 64,
     foodCount: 80,
     foodRespawnRate: 5,
     kFactor: 32,
     seed: 42,
     showcaseInterval: 1,
-    saveTopMatchReplays: 5,
+    saveTopMatchReplays: 10,
 };
 
 /** Fields synced to/from URL query params (excludes name/description/priority). */
@@ -134,6 +160,7 @@ export default function QueueDashboard() {
     const [error, setError] = useState<string | null>(null);
     const [expandedLog, setExpandedLog] = useState<string | null>(null);
     const [logText, setLogText] = useState('');
+    const [expandedParams, setExpandedParams] = useState<string | null>(null);
     const [expandedReplays, setExpandedReplays] = useState<string | null>(null);
     const [replayGens, setReplayGens] = useState<number[]>([]);
     const [selectedGen, setSelectedGen] = useState<number | null>(null);
@@ -426,7 +453,44 @@ export default function QueueDashboard() {
                                                 {expandedReplays === run.runId ? 'Hide Replays' : 'Replays'}
                                             </button>
                                         )}
+                                        {run.status.config && (
+                                            <button onClick={() => setExpandedParams(expandedParams === run.runId ? null : run.runId)} style={btnStyle('#2a2a1a', '#4a4a2a')}>
+                                                {expandedParams === run.runId ? 'Hide Params' : 'Params'}
+                                            </button>
+                                        )}
                                     </div>
+                                    {expandedParams === run.runId && run.status.config && (
+                                        <div style={{
+                                            margin: '4px 0 0 0',
+                                            padding: '8px 12px',
+                                            background: '#0a0a0a',
+                                            border: '1px solid #282828',
+                                            borderRadius: 4,
+                                            display: 'flex',
+                                            gap: 16,
+                                            flexWrap: 'wrap',
+                                            fontSize: 11,
+                                            color: '#999',
+                                        }}>
+                                            {(() => {
+                                                const t = run.status.config!.tournament;
+                                                return <>
+                                                    <Stat label="Pop" value={t.populationSize}/>
+                                                    <Stat label="Seeds/Genome" value={t.matchPopulationSize}/>
+                                                    <Stat label="Generations" value={t.generations}/>
+                                                    <Stat label="Matches/Gen" value={t.matchesPerGeneration}/>
+                                                    <Stat label="Grid" value={`${t.gridWidth}x${t.gridHeight}`}/>
+                                                    <Stat label="Match Ticks" value={t.matchTickLimit}/>
+                                                    <Stat label="Food" value={t.foodCount}/>
+                                                    <Stat label="Food Respawn" value={t.foodRespawnRate}/>
+                                                    <Stat label="K Factor" value={t.kFactor}/>
+                                                    <Stat label="Seed" value={t.seed}/>
+                                                    <Stat label="Showcase Int." value={t.showcaseInterval}/>
+                                                    <Stat label="Top Replays" value={t.saveTopMatchReplays}/>
+                                                </>;
+                                            })()}
+                                        </div>
+                                    )}
                                     {expandedLog === run.runId && (
                                         <pre style={{
                                             margin: '4px 0 0 0',

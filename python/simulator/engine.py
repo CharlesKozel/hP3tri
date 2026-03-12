@@ -208,7 +208,7 @@ class SimulationEngine:
         self._init_default_brain_params()
 
     def _init_default_brain_params(self) -> None:
-        """Initialize default brain parameters for genome 0."""
+        """Initialize default brain parameters for all genomes via bulk numpy copy."""
         defaults = np.zeros(NUM_BRAIN_PARAMS, dtype=np.float32)
         defaults[0] = 0.3   # P_FLEE_THRESHOLD
         defaults[1] = 0.2   # P_THREAT_DIST_THRESHOLD
@@ -224,14 +224,13 @@ class SimulationEngine:
         defaults[23] = 0.5  # P_GROW_TOWARD_FOOD
         defaults[24] = 0.5  # P_FLEE_SPEED
         defaults[25] = 0.3  # P_AGGRESSION
-        # Set for all genomes as default
-        for g in range(MAX_GENOMES):
-            for i in range(NUM_BRAIN_PARAMS):
-                self.brain_params[g, i] = float(defaults[i])
+        bulk = np.tile(defaults, (MAX_GENOMES, 1))
+        self.brain_params.from_numpy(bulk)
 
     def set_genome_brain_params(self, genome_id: int, params: np.ndarray) -> None:
         """Set brain parameters for a specific genome."""
-        for i in range(min(len(params), NUM_BRAIN_PARAMS)):
+        n = min(len(params), NUM_BRAIN_PARAMS)
+        for i in range(n):
             self.brain_params[genome_id, i] = float(params[i])
 
     # ── Full tick ───────────────────────────────────────────────
@@ -274,41 +273,53 @@ class SimulationEngine:
             print(f"  [Engine] First tick complete ({_time.perf_counter() - _t0:.1f}s)", flush=True)
 
     def step_profiled(self) -> dict[str, float]:
-        """Profiled version of step() that returns per-phase timings."""
+        """Profiled version of step() that returns per-phase timings.
+
+        Uses ti.sync() between phases for accurate GPU measurement.
+        """
         import time as _t
         timings: dict[str, float] = {}
         self.tick_count += 1
 
+        ti.sync()
         t0 = _t.perf_counter()
         self.recompute_aggregates()
+        ti.sync()
         timings['aggregates'] = _t.perf_counter() - t0
 
         t0 = _t.perf_counter()
         self.apply_resources()
+        ti.sync()
         timings['resources'] = _t.perf_counter() - t0
 
         t0 = _t.perf_counter()
         self.step_sensors()
+        ti.sync()
         timings['sensors'] = _t.perf_counter() - t0
 
         t0 = _t.perf_counter()
         self.step_brains()
+        ti.sync()
         timings['brains'] = _t.perf_counter() - t0
 
         t0 = _t.perf_counter()
         self.process_movement()
+        ti.sync()
         timings['movement'] = _t.perf_counter() - t0
 
         t0 = _t.perf_counter()
         self.step_actions()
+        ti.sync()
         timings['actions'] = _t.perf_counter() - t0
 
         t0 = _t.perf_counter()
         self.process_death_and_disconnection()
+        ti.sync()
         timings['death'] = _t.perf_counter() - t0
 
         t0 = _t.perf_counter()
         self.increment_ages()
+        ti.sync()
         timings['ages'] = _t.perf_counter() - t0
 
         return timings

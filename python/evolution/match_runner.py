@@ -169,14 +169,44 @@ def _run_match(
         engine.recompute_aggregates()
 
     _tick_t0 = _time.perf_counter()
-    for tick in range(tick_limit):
-        engine.step()
+    # Profile first match in detail
+    profile_this = not hasattr(_run_match, '_profiled')
+    if profile_this:
+        _run_match._profiled = True  # type: ignore[attr-defined]
 
-        if replay is not None and (tick % snapshot_interval == 0 or tick == tick_limit - 1):
+        # Tick 0: warmup to trigger Taichi JIT compilation (not counted in profile)
+        _compile_t0 = _time.perf_counter()
+        engine.step_profiled()
+        compile_time = _time.perf_counter() - _compile_t0
+        print(f"  [Profile] Tick 0 warmup (kernel compilation): {compile_time:.2f}s", flush=True)
+
+        if replay is not None:
             replay.append(engine.snapshot())
 
-        if food_respawn_interval > 0 and tick > 0 and tick % food_respawn_interval == 0:
-            _place_food(engine, food_respawn_rate, rng)
+        # Ticks 1+: profile actual runtime performance
+        phase_totals: dict[str, float] = {}
+        for tick in range(1, tick_limit):
+            timings = engine.step_profiled()
+            for k, v in timings.items():
+                phase_totals[k] = phase_totals.get(k, 0) + v
+
+            if replay is not None and (tick % snapshot_interval == 0 or tick == tick_limit - 1):
+                replay.append(engine.snapshot())
+            if food_respawn_interval > 0 and tick > 0 and tick % food_respawn_interval == 0:
+                _place_food(engine, food_respawn_rate, rng)
+
+        profiled_ticks = tick_limit - 1
+        total = sum(phase_totals.values())
+        parts = "  ".join(f"{k}={v:.3f}s({v/total*100:.0f}%)" for k, v in sorted(phase_totals.items(), key=lambda x: -x[1]))
+        print(f"  [Profile] {profiled_ticks} ticks in {total:.2f}s: {parts}", flush=True)
+    else:
+        for tick in range(tick_limit):
+            engine.step()
+
+            if replay is not None and (tick % snapshot_interval == 0 or tick == tick_limit - 1):
+                replay.append(engine.snapshot())
+            if food_respawn_interval > 0 and tick > 0 and tick % food_respawn_interval == 0:
+                _place_food(engine, food_respawn_rate, rng)
 
     elapsed = _time.perf_counter() - _tick_t0
     tps = tick_limit / elapsed if elapsed > 0 else 0
@@ -192,11 +222,33 @@ def run_evolution_match(
     if error is not None:
         return [{"error": error}]
 
+    # Bulk-read organism fields once via numpy instead of per-organism Python reads
+    n = engine.next_org_id
+    alive_np = engine.organisms.alive.to_numpy()[:n]
+    genome_id_np = engine.organisms.genome_id.to_numpy()[:n]
+    cell_count_np = engine.organisms.cell_count.to_numpy()[:n]
+    energy_np = engine.organisms.energy.to_numpy()[:n]
+    locomotion_np = engine.organisms.locomotion_power.to_numpy()[:n]
+    mass_np = engine.organisms.total_mass.to_numpy()[:n]
+    ct_counts_np = engine.organisms.cell_type_counts.to_numpy()[:n]
+
     results: list[dict[str, Any]] = []
     for gid in genome_ids:
-        final_cells = _count_genome_cells(engine, gid)
-        final_energy = _sum_genome_energy(engine, gid)
-        mobility, aggression = _compute_behavior_descriptors(engine, gid)
+        mask = (genome_id_np == gid) & (alive_np == 1)
+        final_cells = int(cell_count_np[mask].sum())
+        final_energy = int(energy_np[mask].sum())
+
+        total_locomotion = int(locomotion_np[mask].sum())
+        total_mass = int(mass_np[mask].sum())
+        total_cells = int(cell_count_np[mask].sum())
+        mouth_spike = int(ct_counts_np[mask, int(CellType.MOUTH)].sum() +
+                          ct_counts_np[mask, int(CellType.SPIKE)].sum())
+
+        if total_mass > 0 and total_cells > 0:
+            mobility = min(total_locomotion / total_mass, 1.0)
+            aggression = min(mouth_spike / total_cells, 1.0)
+        else:
+            mobility, aggression = 0.0, 0.0
 
         results.append({
             "genome_id": gid,
@@ -235,52 +287,6 @@ def _place_food(engine: SimulationEngine, count: int, rng: np.random.Generator) 
             ct_np[idx] = int(CellType.FOOD)
             placed += 1
         attempts += 1
-
-
-def _count_genome_cells(engine: SimulationEngine, genome_id: int) -> int:
-    total = 0
-    for oid in range(1, engine.next_org_id):
-        if (engine.organism_genome_map.get(oid) == genome_id
-                and engine.organisms[oid].alive == 1):
-            total += int(engine.organisms[oid].cell_count)
-    return total
-
-
-def _sum_genome_energy(engine: SimulationEngine, genome_id: int) -> int:
-    total = 0
-    for oid in range(1, engine.next_org_id):
-        if (engine.organism_genome_map.get(oid) == genome_id
-                and engine.organisms[oid].alive == 1):
-            total += int(engine.organisms[oid].energy)
-    return total
-
-
-def _compute_behavior_descriptors(
-    engine: SimulationEngine,
-    genome_id: int,
-) -> tuple[float, float]:
-    total_locomotion = 0
-    total_mass = 0
-    total_mouth_spike = 0
-    total_cells = 0
-    count = 0
-    for oid in range(1, engine.next_org_id):
-        if engine.organism_genome_map.get(oid) == genome_id and engine.organisms[oid].alive == 1:
-            total_locomotion += int(engine.organisms[oid].locomotion_power)
-            total_mass += int(engine.organisms[oid].total_mass)
-            cc = int(engine.organisms[oid].cell_count)
-            total_cells += cc
-            mouth_ct = int(engine.organisms[oid].cell_type_counts[int(CellType.MOUTH)])
-            spike_ct = int(engine.organisms[oid].cell_type_counts[int(CellType.SPIKE)])
-            total_mouth_spike += mouth_ct + spike_ct
-            count += 1
-
-    if count == 0 or total_mass == 0 or total_cells == 0:
-        return 0.0, 0.0
-
-    mobility = min(total_locomotion / total_mass, 1.0)
-    aggression = min(total_mouth_spike / total_cells, 1.0)
-    return mobility, aggression
 
 
 def run_genome_preview(

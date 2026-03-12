@@ -37,6 +37,7 @@ data class RunStatus(
     val updatedAt: String,
     val error: String? = null,
     val hasReplays: Boolean = false,
+    val config: JobConfig? = null,
 )
 
 data class ActiveRun(

@@ -265,6 +265,7 @@ class JobScheduler(private val bridge: JepBridge) {
             startedAt = active.startedAt,
             updatedAt = Instant.now().toString(),
             hasReplays = replaysDir.isDirectory && (replaysDir.list()?.isNotEmpty() == true),
+            config = active.jobConfig,
         )
     }
 
