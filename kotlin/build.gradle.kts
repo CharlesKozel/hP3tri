@@ -9,8 +9,27 @@ val ktor_version = "3.1.1"
 application {
     applicationName = "hp3tri"
     mainClass.set("dev.ckozel.alife.hp3tri.MainKt")
+    val jepPath: String
+    val libraryPath: String
+    if (org.gradle.internal.os.OperatingSystem.current().isWindows) {
+        jepPath = "${project.rootDir}/.venv/Lib/site-packages/jep"
+        // python312.dll must be on java.library.path for jep.dll to load
+        val pythonHome = File("${project.rootDir}/.venv/Scripts/python.exe").canonicalFile
+            .parentFile.parentFile.let { venvDir ->
+                // Resolve base Python install from venv's pyvenv.cfg
+                val cfg = File(venvDir, "pyvenv.cfg")
+                if (cfg.exists()) {
+                    cfg.readLines().firstOrNull { it.startsWith("home") }
+                        ?.substringAfter("=")?.trim() ?: venvDir.absolutePath
+                } else venvDir.absolutePath
+            }
+        libraryPath = "$jepPath;$pythonHome"
+    } else {
+        jepPath = "${project.rootDir}/.venv/lib/python3.12/site-packages/jep"
+        libraryPath = jepPath
+    }
     applicationDefaultJvmArgs = listOf(
-        "-Djava.library.path=${project.rootDir}/.venv/lib/python3.12/site-packages/jep",
+        "-Djava.library.path=$libraryPath",
     )
 }
 
@@ -39,10 +58,34 @@ tasks.test {
 
 tasks.named<JavaExec>("run") {
     workingDir = rootDir
-    val venvSitePackages = "${rootDir}/.venv/lib/python3.12/site-packages"
+    val venvSitePackages: String
+    if (org.gradle.internal.os.OperatingSystem.current().isWindows) {
+        venvSitePackages = "${rootDir}/.venv/Lib/site-packages"
+        // Windows DLL loader finds python312.dll via PATH, not java.library.path
+        val pythonHome = File("${rootDir}/.venv/pyvenv.cfg").let { cfg ->
+            if (cfg.exists()) {
+                cfg.readLines().firstOrNull { it.startsWith("home") }
+                    ?.substringAfter("=")?.trim() ?: ""
+            } else ""
+        }
+        if (pythonHome.isNotEmpty()) {
+            val currentPath = System.getenv("PATH") ?: ""
+            environment("PATH", "$pythonHome;$currentPath")
+        }
+    } else {
+        venvSitePackages = "${rootDir}/.venv/lib/python3.12/site-packages"
+    }
     environment("PYTHONPATH", venvSitePackages)
+    environment("TAICHI_ARCH", System.getenv("TAICHI_ARCH") ?: "cuda")
 }
 
 kotlin {
-    jvmToolchain(21)
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
+    }
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
 }

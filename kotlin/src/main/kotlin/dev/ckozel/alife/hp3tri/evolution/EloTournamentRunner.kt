@@ -22,8 +22,8 @@ data class EloTournamentConfig(
     val gridWidth: Int = 64,
     val gridHeight: Int = 64,
     val matchTickLimit: Int = 500,
-    val previewTickLimit: Int = 100,
-    val previewGridSize: Int = 128,
+    val previewTickLimit: Int = 30,
+    val previewGridSize: Int = 48,
     val foodCount: Int = 80,
     val foodRespawnRate: Int = 5,
     val matchPopulationSize: Int = 1,
@@ -149,18 +149,18 @@ class EloTournamentRunner(
 
                     updateElo(matchGenome1, matchGenome2, score1, score2)
 
-                    if (config.saveTopMatchReplays > 0
-                        && matchIdx < config.saveTopMatchReplays
-                        && config.showcaseInterval > 0
-                        && gen % config.showcaseInterval == 0
-                    ) {
-                        saveMatchReplay(gen, matchIdx, matchGenome1, matchGenome2)
-                    }
-
                     matchesCompletedThisGen++
                 }
 
                 val sorted = population.sortedByDescending { it.elo }
+
+                // Save showcase replays using top-ranked genomes
+                if (config.saveTopMatchReplays > 0
+                    && config.showcaseInterval > 0
+                    && gen % config.showcaseInterval == 0
+                ) {
+                    saveShowcaseReplays(gen, sorted)
+                }
                 val topElo = sorted.first().elo
                 val avgElo = population.map { it.elo }.average().toFloat()
                 val medianElo = sorted[sorted.size / 2].elo
@@ -256,12 +256,14 @@ class EloTournamentRunner(
     }
 
     private fun runPreviewBatch(entries: List<EloGenomeEntry>) {
-        for (entry in entries) {
+        val startTime = System.currentTimeMillis()
+        println("  [Previews] Generating ${entries.size} genome previews...")
+        for ((i, entry) in entries.withIndex()) {
             if (shouldStop) break
             try {
                 val previewConfig = mapOf(
-                    "width" to config.previewGridSize,
-                    "height" to config.previewGridSize,
+                    "width" to config.gridWidth,
+                    "height" to config.gridHeight,
                     "tick_limit" to config.previewTickLimit,
                     "seed" to config.seed,
                 )
@@ -274,55 +276,74 @@ class EloTournamentRunner(
                     val state = bridge.convertPreviewFrame(snapshotRaw)
                     previewCache[entry.genome.id] = state
                 }
+                if ((i + 1) % 10 == 0 || i + 1 == entries.size) {
+                    val elapsed = (System.currentTimeMillis() - startTime) / 1000.0
+                    println("  [Previews] ${i + 1}/${entries.size} (${String.format("%.1f", elapsed)}s)")
+                }
             } catch (e: Exception) {
                 addLog("Preview failed for genome ${entry.genome.id}: ${e.message}")
             }
         }
+        val totalTime = (System.currentTimeMillis() - startTime) / 1000.0
+        println("  [Previews] Done in ${String.format("%.1f", totalTime)}s")
     }
 
-    private fun saveMatchReplay(gen: Int, matchIdx: Int, entry1: EloGenomeEntry, entry2: EloGenomeEntry) {
+    private fun saveShowcaseReplays(gen: Int, sorted: List<EloGenomeEntry>) {
         if (replayDir == null) return
-        try {
-            val matchConfig = mapOf(
-                "width" to config.gridWidth,
-                "height" to config.gridHeight,
-                "tick_limit" to config.matchTickLimit,
-                "seed" to config.seed + gen * 10000 + matchIdx,
-                "food_count" to config.foodCount,
-                "food_respawn_rate" to config.foodRespawnRate,
-                "population_size" to config.matchPopulationSize,
-            )
-            val genomeDicts = listOf(entry1.genome.toDict(), entry2.genome.toDict())
-            val frames = bridge.runVisualizableMatch(matchConfig, genomeDicts)
+        val genDir = File(replayDir, "gen_$gen")
+        genDir.mkdirs()
 
-            val genDir = File(replayDir, "gen_$gen")
-            genDir.mkdirs()
-
-            val filename = "match_$matchIdx.json"
-            val framesJson = jsonCompact.encodeToString(ListSerializer(SimulationState.serializer()), frames)
-            File(genDir, filename).writeText(framesJson)
-
-            if (matchIdx == 0) {
-                val matchEntries = (0 until config.saveTopMatchReplays).map { i ->
-                    ReplayMatchEntry(
-                        matchIndex = i,
-                        filename = "match_$i.json",
-                        genomeIds = listOf(entry1.genome.id, entry2.genome.id),
-                        totalTicks = config.matchTickLimit,
-                    )
-                }
-                val index = ReplayIndex(
-                    generation = gen,
-                    gridWidth = config.gridWidth,
-                    gridHeight = config.gridHeight,
-                    tickLimit = config.matchTickLimit,
-                    matches = matchEntries,
-                )
-                File(genDir, "index.json").writeText(jsonCompact.encodeToString(ReplayIndex.serializer(), index))
+        // Pair top genomes: #1v#2, #1v#3, #2v#3, #1v#4, ...
+        val topN = sorted.take((config.saveTopMatchReplays + 1).coerceAtMost(sorted.size))
+        val pairs = mutableListOf<Pair<EloGenomeEntry, EloGenomeEntry>>()
+        for (i in topN.indices) {
+            for (j in i + 1 until topN.size) {
+                pairs.add(topN[i] to topN[j])
+                if (pairs.size >= config.saveTopMatchReplays) break
             }
-        } catch (e: Exception) {
-            addLog("Replay save failed gen $gen match $matchIdx: ${e.message}")
+            if (pairs.size >= config.saveTopMatchReplays) break
         }
+
+        val matchEntries = mutableListOf<ReplayMatchEntry>()
+
+        for ((matchIdx, pair) in pairs.withIndex()) {
+            val (entry1, entry2) = pair
+            try {
+                val matchConfig = mapOf(
+                    "width" to config.gridWidth,
+                    "height" to config.gridHeight,
+                    "tick_limit" to config.matchTickLimit,
+                    "seed" to config.seed + gen * 10000 + matchIdx,
+                    "food_count" to config.foodCount,
+                    "food_respawn_rate" to config.foodRespawnRate,
+                    "population_size" to config.matchPopulationSize,
+                )
+                val genomeDicts = listOf(entry1.genome.toDict(), entry2.genome.toDict())
+                val frames = bridge.runVisualizableMatch(matchConfig, genomeDicts)
+
+                val filename = "match_$matchIdx.json"
+                val framesJson = jsonCompact.encodeToString(ListSerializer(SimulationState.serializer()), frames)
+                File(genDir, filename).writeText(framesJson)
+
+                matchEntries.add(ReplayMatchEntry(
+                    matchIndex = matchIdx,
+                    filename = filename,
+                    genomeIds = listOf(entry1.genome.id, entry2.genome.id),
+                    totalTicks = frames.size,
+                ))
+            } catch (e: Exception) {
+                addLog("Replay save failed gen $gen match $matchIdx: ${e.message}")
+            }
+        }
+
+        val index = ReplayIndex(
+            generation = gen,
+            gridWidth = config.gridWidth,
+            gridHeight = config.gridHeight,
+            tickLimit = config.matchTickLimit,
+            matches = matchEntries,
+        )
+        File(genDir, "index.json").writeText(jsonCompact.encodeToString(ReplayIndex.serializer(), index))
     }
 
     private fun saveCheckpoint(gen: Int) {

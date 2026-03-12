@@ -87,12 +87,50 @@ const DEFAULT_FORM: JobForm = {
     saveTopMatchReplays: 5,
 };
 
+/** Fields synced to/from URL query params (excludes name/description/priority). */
+const URL_FORM_KEYS: (keyof JobForm)[] = [
+    'populationSize', 'matchPopulationSize', 'generations', 'matchesPerGeneration',
+    'gridWidth', 'gridHeight', 'matchTickLimit', 'previewTickLimit', 'previewGridSize',
+    'foodCount', 'foodRespawnRate', 'kFactor', 'seed', 'showcaseInterval', 'saveTopMatchReplays',
+];
+
+function formFromParams(params: URLSearchParams): JobForm {
+    const form = {...DEFAULT_FORM};
+    for (const key of URL_FORM_KEYS) {
+        const val = params.get(key);
+        if (val !== null) {
+            (form as Record<string, string | number>)[key] = parseInt(val) || DEFAULT_FORM[key];
+        }
+    }
+    const name = params.get('name');
+    if (name) form.name = name;
+    const desc = params.get('description');
+    if (desc) form.description = desc;
+    return form;
+}
+
+function formToParams(form: JobForm, existing: URLSearchParams): URLSearchParams {
+    const params = new URLSearchParams(existing);
+    // Preserve non-form params like 'host'
+    for (const key of URL_FORM_KEYS) {
+        const val = form[key];
+        if (val !== DEFAULT_FORM[key]) {
+            params.set(key, String(val));
+        } else {
+            params.delete(key);
+        }
+    }
+    if (form.name) params.set('name', form.name); else params.delete('name');
+    if (form.description) params.set('description', form.description); else params.delete('description');
+    return params;
+}
+
 export default function QueueDashboard() {
-    const [searchParams] = useSearchParams();
+    const [searchParams, setSearchParams] = useSearchParams();
     const [pending, setPending] = useState<PendingJob[]>([]);
     const [runs, setRuns] = useState<RunSummary[]>([]);
     const [current, setCurrent] = useState<CurrentRun | null>(null);
-    const [form, setForm] = useState<JobForm>({...DEFAULT_FORM});
+    const [form, setForm] = useState<JobForm>(() => formFromParams(searchParams));
     const [error, setError] = useState<string | null>(null);
     const [expandedLog, setExpandedLog] = useState<string | null>(null);
     const [logText, setLogText] = useState('');
@@ -262,7 +300,11 @@ export default function QueueDashboard() {
     };
 
     const updateField = (field: keyof JobForm, value: string | number) => {
-        setForm(prev => ({...prev, [field]: value}));
+        setForm(prev => {
+            const next = {...prev, [field]: value};
+            setSearchParams(formToParams(next, searchParams), {replace: true});
+            return next;
+        });
     };
 
     return (

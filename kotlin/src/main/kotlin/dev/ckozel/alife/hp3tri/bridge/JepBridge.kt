@@ -11,13 +11,18 @@ class JepBridge(pythonSourceDir: String) {
     }
 
     private val interpreter: SharedInterpreter = runOnJepThread {
+        println("  [Jep] Creating Python interpreter...")
         SharedInterpreter().apply {
             exec("import sys")
             exec("sys.stdout.reconfigure(line_buffering=True)")
-            exec("sys.path.insert(0, '$pythonSourceDir')")
+            exec("sys.path.insert(0, '${pythonSourceDir.replace("\\", "/")}')")
+            println("  [Jep] Importing simulator (triggers Taichi init)...")
             exec("from simulator.sim_runner import run_simulation")
+            println("  [Jep] Importing cell types...")
             exec("from simulator.cell_types import get_cell_type_metadata")
+            println("  [Jep] Importing match runner...")
             exec("from evolution.match_runner import run_evolution_match, run_visualizable_match, run_genome_preview")
+            println("  [Jep] Python bridge ready.")
         }
     }
 

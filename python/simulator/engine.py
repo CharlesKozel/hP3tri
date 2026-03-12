@@ -1,4 +1,5 @@
 import os
+import time as _time
 
 import taichi as ti
 import numpy as np
@@ -59,8 +60,12 @@ from simulator.cell_types import NUM_CELL_TYPES
 MAX_GENOMES: int = 1024
 
 _ARCH_MAP = {"cuda": ti.cuda, "cpu": ti.cpu, "metal": ti.metal, "vulkan": ti.vulkan}
-_arch = _ARCH_MAP.get(os.environ.get("TAICHI_ARCH", "cpu").lower(), ti.cpu)
+_arch_name = os.environ.get("TAICHI_ARCH", "cpu").lower()
+_arch = _ARCH_MAP.get(_arch_name, ti.cpu)
+print(f"  [Engine] Taichi init (arch={_arch_name})...", flush=True)
+_t0 = _time.perf_counter()
 ti.init(arch=_arch, default_ip=ti.i32, default_fp=ti.f32)
+print(f"  [Engine] Taichi ready ({_time.perf_counter() - _t0:.1f}s)", flush=True)
 
 MAX_ORGANISMS = 2**16
 
@@ -112,6 +117,8 @@ class Organism:
 @ti.data_oriented
 class SimulationEngine:
     def __init__(self, width: int, height: int, seed: int = 42) -> None:
+        _t0 = _time.perf_counter()
+        print(f"  [Engine] Creating {width}x{height} grid...", flush=True)
         self.width = width
         self.height = height
         self.grid_size = width * height
@@ -177,6 +184,9 @@ class SimulationEngine:
         self.ct_fields = CellTypeFields()
         self.ct_fields.load()
 
+        self._kernels_compiled = False
+        print(f"  [Engine] Grid ready ({_time.perf_counter() - _t0:.1f}s)", flush=True)
+
     def reset(self, seed: int = 42) -> None:
         """Reset all state for engine reuse across matches (avoids Taichi recompilation)."""
         self.tick_count = 0
@@ -228,22 +238,40 @@ class SimulationEngine:
     def step(self) -> None:
         # Tick 0 is initial conditions, no actions / brain eval
         self.tick_count += 1
+        is_first = not self._kernels_compiled
+
+        if is_first:
+            _t0 = _time.perf_counter()
+            print("  [Engine] First tick (compiling kernels)...", flush=True)
 
         self.recompute_aggregates()
+        if is_first:
+            print(f"    aggregates ({_time.perf_counter() - _t0:.1f}s)", flush=True)
 
         self.apply_resources()
 
         self.step_sensors()
+        if is_first:
+            print(f"    sensors ({_time.perf_counter() - _t0:.1f}s)", flush=True)
 
         self.step_brains()
+        if is_first:
+            print(f"    brains ({_time.perf_counter() - _t0:.1f}s)", flush=True)
 
         self.process_movement()
+        if is_first:
+            print(f"    movement ({_time.perf_counter() - _t0:.1f}s)", flush=True)
 
         self.step_actions()
+        if is_first:
+            print(f"    actions ({_time.perf_counter() - _t0:.1f}s)", flush=True)
 
         self.process_death_and_disconnection()
 
         self.increment_ages()
+        if is_first:
+            self._kernels_compiled = True
+            print(f"  [Engine] First tick complete ({_time.perf_counter() - _t0:.1f}s)", flush=True)
 
     def step_profiled(self) -> dict[str, float]:
         """Profiled version of step() that returns per-phase timings."""
@@ -845,34 +873,34 @@ class SimulationEngine:
         oi: NDArray[np.int32] = self.grid.organism_id.to_numpy()
         tt: NDArray[np.int8] = self.grid.terrain_type.to_numpy()
 
-        tiles: list[dict] = []
-        for idx in range(self.grid_size):
-            cell = int(ct[idx])
-            terrain = int(tt[idx])
-            if cell != CellType.NULL:
-                q = idx % self.width
-                r = idx // self.width
-                tiles.append({
-                    "q": q,
-                    "r": r,
-                    "terrainType": terrain,
-                    "cellType": cell,
-                    "organismId": int(oi[idx]),
-                })
+        # Vectorized: find non-empty cells, build tile list via numpy
+        mask = ct != 0
+        indices = np.flatnonzero(mask)
+        qs = (indices % self.width).astype(np.int32)
+        rs = (indices // self.width).astype(np.int32)
+        ct_vals = ct[indices]
+        tt_vals = tt[indices]
+        oi_vals = oi[indices]
+
+        tiles: list[dict] = [
+            {"q": int(qs[i]), "r": int(rs[i]), "terrainType": int(tt_vals[i]),
+             "cellType": int(ct_vals[i]), "organismId": int(oi_vals[i])}
+            for i in range(len(indices))
+        ]
 
         organisms: list[dict] = []
+        any_alive = False
         for oid in range(1, self.next_org_id):
+            alive = bool(self.organisms[oid].alive)
+            if alive:
+                any_alive = True
             organisms.append({
                 "id": oid,
                 "genomeId": int(self.organisms[oid].genome_id),
                 "energy": int(self.organisms[oid].energy),
-                "alive": bool(self.organisms[oid].alive),
+                "alive": alive,
                 "cellCount": int(self.organisms[oid].cell_count),
             })
-
-        any_alive = any(
-            self.organisms[oid].alive for oid in range(1, self.next_org_id)
-        )
 
         return {
             "tick": self.tick_count,

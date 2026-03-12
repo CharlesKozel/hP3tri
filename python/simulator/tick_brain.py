@@ -33,6 +33,7 @@ P_REPRODUCE_ENERGY_FRAC: int = 22
 P_GROW_TOWARD_FOOD: int = 23
 P_FLEE_SPEED: int = 24
 P_AGGRESSION: int = 25
+P_MOVEMENT_PREFERENCE: int = 26
 NUM_BRAIN_PARAMS: int = 30
 
 # Default brain parameters (pre-initialized)
@@ -215,6 +216,20 @@ def evaluate_brain_gpu(
             organisms[oid].brain_wants_grow = 1
             organisms[oid].brain_grow_direction = grow_dir
             organisms[oid].brain_grow_cell_type = grow_type
+
+            # Also move while growing if movement preference is high
+            p_move_pref = brain_params[genome_id, P_MOVEMENT_PREFERENCE]
+            if has_locomotion and p_move_pref > 0.5:
+                move_dir = -1
+                if food_sector >= 0 and food_dist < p_food_range:
+                    move_dir = food_sector
+                elif edible_sector >= 0 and edible_dist < 0.5:
+                    move_dir = edible_sector
+                else:
+                    move_dir = _best_open_sector(sensor_distances, oid)
+                if move_dir >= 0:
+                    organisms[oid].brain_move_dir = move_dir
+
             done = 1
 
         # Rule 6: WANDER

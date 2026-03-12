@@ -79,7 +79,7 @@ private val defaultConfig: Map<String, Any> = mapOf(
 
 fun startServer(bridge: JepBridge, port: Int = 8080) {
     val cellTypes = bridge.getCellTypes()
-    var simulation = Simulation(bridge, defaultConfig)
+    var simulation: Simulation? = null
     val scheduler = JobScheduler(bridge)
 
     embeddedServer(Netty, port = port) {
@@ -103,10 +103,19 @@ fun startServer(bridge: JepBridge, port: Int = 8080) {
             }
             get("/api/replay/info") {
                 val sim = simulation
+                if (sim == null) {
+                    call.respond(ReplayInfo(0, 0, 0))
+                    return@get
+                }
                 call.respond(ReplayInfo(sim.totalTicks, sim.width, sim.height))
             }
             get("/api/replay") {
-                call.respond(simulation.replay)
+                val sim = simulation
+                if (sim == null) {
+                    call.respond(emptyList<Any>())
+                    return@get
+                }
+                call.respond(sim.replay)
             }
             get("/api/replay/{tick}") {
                 val tick = call.parameters["tick"]?.toIntOrNull()
@@ -114,7 +123,7 @@ fun startServer(bridge: JepBridge, port: Int = 8080) {
                     call.respond(HttpStatusCode.BadRequest, "Invalid tick parameter")
                     return@get
                 }
-                val frame = simulation.getFrame(tick)
+                val frame = simulation?.getFrame(tick)
                 if (frame == null) {
                     call.respond(HttpStatusCode.NotFound, "Tick $tick not found")
                     return@get
@@ -123,7 +132,7 @@ fun startServer(bridge: JepBridge, port: Int = 8080) {
             }
             post("/api/simulation/reset") {
                 simulation = Simulation(bridge, defaultConfig)
-                call.respond(ReplayInfo(simulation.totalTicks, simulation.width, simulation.height))
+                call.respond(ReplayInfo(simulation!!.totalTicks, simulation!!.width, simulation!!.height))
             }
 
             // Evolution status — works for tournament runner

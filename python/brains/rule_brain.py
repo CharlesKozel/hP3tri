@@ -30,7 +30,8 @@ P_GROW_TOWARD_FOOD = 23
 P_FLEE_SPEED = 24
 P_AGGRESSION = 25
 # 26-29: reserved
-P_RESERVED_START = 26
+P_MOVEMENT_PREFERENCE = 26
+P_RESERVED_START = 27
 
 ORGANISM_CELL_TYPES = [ct for ct in CellType if ct not in (CellType.NULL, CellType.FOOD)]
 
@@ -150,10 +151,23 @@ class RuleBrain(BrainProvider):
             grow_dir = -1
             if food_sector >= 0 and p[P_GROW_TOWARD_FOOD] > 0.5:
                 grow_dir = food_sector
+
+            # Also move while growing if movement preference is high
+            move_dir = -1
+            if has_locomotion and p[P_MOVEMENT_PREFERENCE] > 0.5:
+                if food_sector >= 0 and food_dist < p[P_FOOD_SEEK_RANGE]:
+                    move_dir = food_sector
+                elif edible_sector >= 0 and edible_dist < 0.3:
+                    move_dir = edible_sector
+                else:
+                    wander_weights = p[P_WANDER_SECTOR_START:P_WANDER_SECTOR_START + 6]
+                    move_dir = _best_open_sector(sd, wander_weights)
+
             return BrainOutput(
                 wants_grow=True,
                 grow_direction=grow_dir,
                 grow_cell_type=grow_type,
+                move_direction=move_dir if move_dir >= 0 else -1,
             )
 
         # Rule 6: WANDER

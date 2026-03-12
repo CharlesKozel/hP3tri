@@ -213,4 +213,4 @@ def deduct_movement_costs(
 
 @ti.func
 def get_movement_energy_cost(organism) -> ti.i32:
-    return organism.total_mass # TODO: consider making this a multiplier / allowing fractional mass costs
+    return ti.max(1, organism.cell_count // 3)

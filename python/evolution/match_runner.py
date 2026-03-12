@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time as _time
 from typing import Any
 
 import numpy as np
@@ -143,18 +144,21 @@ def _run_match(
     rng = np.random.default_rng(seed)
     engine = _get_engine(width, height, seed)
 
+    _t0 = _time.perf_counter()
     genome_infos: list[tuple[int, CppnBodyPlan, RuleBrain, int]] = []
     genome_ids: list[int] = []
     for genome_dict in genome_dicts:
         gid, body_plan, brain, seed_ct = _setup_genome(engine, genome_dict)
         genome_infos.append((gid, body_plan, brain, seed_ct))
         genome_ids.append(gid)
+    print(f"  [Match] {len(genome_dicts)} genomes setup ({_time.perf_counter() - _t0:.2f}s)", flush=True)
 
     result = _place_seeds(engine, genome_infos, population_size, rng)
     if isinstance(result, str):
         return engine, genome_ids, None, result
 
     _place_food(engine, food_count, rng)
+    print(f"  [Match] Seeds + food placed ({_time.perf_counter() - _t0:.2f}s)", flush=True)
 
     replay: list[dict] | None = None
     if snapshot_interval > 0:
@@ -164,6 +168,7 @@ def _run_match(
     else:
         engine.recompute_aggregates()
 
+    _tick_t0 = _time.perf_counter()
     for tick in range(tick_limit):
         engine.step()
 
@@ -173,6 +178,9 @@ def _run_match(
         if food_respawn_interval > 0 and tick > 0 and tick % food_respawn_interval == 0:
             _place_food(engine, food_respawn_rate, rng)
 
+    elapsed = _time.perf_counter() - _tick_t0
+    tps = tick_limit / elapsed if elapsed > 0 else 0
+    print(f"  [Match] {tick_limit} ticks in {elapsed:.2f}s ({tps:.0f} ticks/s)", flush=True)
     return engine, genome_ids, replay, None
 
 
@@ -207,7 +215,7 @@ def run_visualizable_match(
     config: dict[str, Any],
     genome_dicts: list[dict[str, Any]],
 ) -> list[dict]:
-    snapshot_interval: int = config.get("snapshot_interval", 3)
+    snapshot_interval: int = config.get("snapshot_interval", 5)
     _, _, replay, _ = _run_match(config, genome_dicts, snapshot_interval)
     return replay if replay is not None else []
 
@@ -279,59 +287,52 @@ def run_genome_preview(
     config: dict[str, Any],
     genome_dict: dict[str, Any],
 ) -> dict[str, Any]:
-    """Run a single genome in isolation to visualize its growth pattern."""
-    width: int = config.get("width", 128)
-    height: int = config.get("height", 128)
-    tick_limit: int = config.get("tick_limit", 100)
-    seed: int = config.get("seed", 42)
+    """Generate a preview by evaluating the CPPN template directly (no simulation)."""
+    width: int = config.get("width", 64)
+    height: int = config.get("height", 64)
 
-    engine = _get_engine(width, height, seed)
+    weights = np.array(genome_dict["cppn_weights"], dtype=np.float32)
+    activations = np.array(genome_dict["cppn_activations"], dtype=np.int32)
+    symmetry = int(genome_dict.get("symmetry_mode", 1))
 
-    gid, body_plan, brain, seed_cell_type = _setup_genome(engine, genome_dict)
-
-    # Suppress reproduction for preview
-    brain_params = np.array(genome_dict["brain_params"], dtype=np.float32).copy()
-    brain_params[4] = 2.0
-    engine.set_genome_brain_params(gid, brain_params)
+    body_plan = CppnBodyPlan(weights, activations, symmetry)
+    template = body_plan.generate_template(dev_time=0.0)
 
     center_q = width // 2
     center_r = height // 2
 
-    org_id = engine.create_organism(
-        seed_q=center_q, seed_r=center_r,
-        seed_cell_type=seed_cell_type,
-        starting_energy=999999,
-        genome_id=gid,
-        brain=brain,
-        body_plan=body_plan,
-    )
+    tiles: list[dict[str, Any]] = []
+    for (dq, dr), cell_type in template.items():
+        tiles.append({
+            "q": center_q + dq,
+            "r": center_r + dr,
+            "terrainType": 0,
+            "cellType": int(cell_type),
+            "organismId": 1,
+        })
 
-    genome_data = engine.genome_registry[gid]
-    genome_data["origin_q"] = center_q
-    genome_data["origin_r"] = center_r
-
-    snapshot_ticks: list[int] = [
-        tick_limit // 4,
-        tick_limit // 2,
-        (tick_limit * 3) // 4,
-        tick_limit - 1,
-    ]
-
-    snapshots: list[dict] = []
-    engine.recompute_aggregates()
-
-    for tick in range(tick_limit):
-        engine.step()
-        if tick in snapshot_ticks:
-            snapshots.append(engine.snapshot())
-
-    final_cells = _count_genome_cells(engine, gid)
+    snapshot: dict[str, Any] = {
+        "tick": 0,
+        "status": "preview",
+        "grid": {
+            "width": width,
+            "height": height,
+            "tiles": tiles,
+        },
+        "organisms": [{
+            "id": 1,
+            "genomeId": int(genome_dict["id"]),
+            "energy": 999999,
+            "alive": True,
+            "cellCount": len(tiles),
+        }],
+    }
 
     return {
-        "final_snapshot": snapshots[-1] if snapshots else engine.snapshot(),
-        "snapshots": snapshots,
-        "final_cell_count": final_cells,
-        "survived": final_cells > 0,
+        "final_snapshot": snapshot,
+        "snapshots": [snapshot],
+        "final_cell_count": len(tiles),
+        "survived": len(tiles) > 0,
     }
 
 
