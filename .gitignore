@@ -35,6 +35,9 @@ data/queue/
 web/node_modules/
 web/dist/
 
+# Demo output
+python/demos/output/
+
 # OS
 .DS_Store
 Thumbs.db

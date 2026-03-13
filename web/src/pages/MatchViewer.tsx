@@ -5,6 +5,19 @@ import StatsPanel from '../components/StatsPanel';
 import {getApiBase} from '../api';
 import type {CellTypeInfo, ReplayInfo, SimulationState} from '../types';
 
+const DEFAULT_CELL_TYPES: CellTypeInfo[] = [
+    {id: 0, name: 'Empty', color: '#000000'},
+    {id: 1, name: 'Soft Tissue', color: '#e8b4a0'},
+    {id: 2, name: 'Mouth', color: '#cc3333'},
+    {id: 3, name: 'Flagella', color: '#cc88dd'},
+    {id: 4, name: 'Eye', color: '#ffffff'},
+    {id: 5, name: 'Spike', color: '#ff6600'},
+    {id: 6, name: 'Food', color: '#66dd66'},
+    {id: 7, name: 'Photosynthetic', color: '#33aa33'},
+    {id: 8, name: 'Armor', color: '#8888aa'},
+    {id: 9, name: 'Skin', color: '#ddbb88'},
+];
+
 export default function MatchViewer() {
     const [searchParams] = useSearchParams();
     const [replay, setReplay] = useState<SimulationState[] | null>(null);
@@ -16,7 +29,37 @@ export default function MatchViewer() {
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
     const [statsOpen, setStatsOpen] = useState(true);
+    const [fileLoaded, setFileLoaded] = useState(false);
+    const fileInputRef = useRef<HTMLInputElement | null>(null);
     const intervalRef = useRef<number | null>(null);
+
+    const handleFileLoad = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+            try {
+                const data = JSON.parse(reader.result as string);
+                const frames: SimulationState[] = data.frames;
+                if (!frames?.length) throw new Error('No frames in file');
+                setReplay(frames);
+                setReplayInfo({
+                    totalTicks: frames[frames.length - 1]?.tick ?? frames.length - 1,
+                    width: frames[0]?.grid?.width ?? 64,
+                    height: frames[0]?.grid?.height ?? 64,
+                });
+                setCellTypes(DEFAULT_CELL_TYPES);
+                setCurrentTick(0);
+                setPlaying(true);
+                setError(null);
+                setLoading(false);
+                setFileLoaded(true);
+            } catch (err) {
+                setError(err instanceof Error ? err.message : String(err));
+            }
+        };
+        reader.readAsText(file);
+    }, []);
 
     const fetchReplay = useCallback(async () => {
         setLoading(true);
@@ -93,8 +136,10 @@ export default function MatchViewer() {
     }, [searchParams]);
 
     useEffect(() => {
-        fetchReplay();
-    }, [fetchReplay]);
+        if (!fileLoaded) {
+            fetchReplay();
+        }
+    }, [fetchReplay, fileLoaded]);
 
     useEffect(() => {
         if (intervalRef.current !== null) {
@@ -148,7 +193,9 @@ export default function MatchViewer() {
             <div style={{padding: 20, color: '#ff4444', fontFamily: 'monospace'}}>
                 Failed to load replay: {error}
                 <br/>
-                Make sure the Kotlin server is running on port 8080.
+                Make sure the Kotlin server is running on port 8080, or load a JSON file:
+                <br/><br/>
+                <input type="file" accept=".json" onChange={handleFileLoad} />
             </div>
         );
     }
@@ -225,6 +272,16 @@ export default function MatchViewer() {
                     </label>
                     <button onClick={handleReset} style={btnStyle}>
                         Reset
+                    </button>
+                    <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept=".json"
+                        style={{display: 'none'}}
+                        onChange={handleFileLoad}
+                    />
+                    <button onClick={() => fileInputRef.current?.click()} style={btnStyle} title="Load replay JSON">
+                        Load File
                     </button>
                     <button onClick={() => setStatsOpen(!statsOpen)} style={btnStyle} title="Stats">
                         {'\u2630'}

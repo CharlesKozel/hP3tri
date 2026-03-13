@@ -302,6 +302,7 @@ class SimulationEngine:
         self.organisms[org_id].alive = 1
         self.organisms[org_id].genome_id = genome_id
         self.organisms[org_id].energy = starting_energy
+        self.organisms[org_id].cell_count = 1
         self.organisms[org_id].age = 0
         self.organisms[org_id].movement_points = 0
 
@@ -575,6 +576,16 @@ class SimulationEngine:
             self.organisms[org_id].brain_reproduce_cell_idx = outputs.reproduce_cell_idx
             self.organisms[org_id].brain_reproduce_direction = outputs.reproduce_direction
             self.organisms[org_id].brain_reproduce_energy = outputs.reproduce_energy
+
+        # Resolve -2 reproduce requests (find valid cell via kernel)
+        self._kernel_find_reproduce_cells(
+            self.organisms,
+            self.grid,
+            self.ct_fields.can_reproduce,
+            self.grid_size,
+            self.width,
+            self.next_org_id,
+        )
 
 
     # ── Step 4: Movement kernels ──────────────────────────────────

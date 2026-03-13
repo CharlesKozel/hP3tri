@@ -35,8 +35,7 @@ P_FLEE_SPEED: int = 24
 P_AGGRESSION: int = 25
 NUM_BRAIN_PARAMS: int = 30
 
-# Default brain parameters (pre-initialized)
-SENSOR_NOTHING: int = 0  # Cell type for empty
+SENSOR_NOTHING: int = 9999
 
 
 @ti.func
@@ -53,10 +52,10 @@ def _nearest_sector_impl(
 ) -> ti.types.vector(2, ti.i32):
     """Find sector with nearest detection. Returns (sector, distance*1000)."""
     best_sector = -1
-    best_dist = max_range * 1000  # Store as integer * 1000 for precision
+    best_dist = max_range * 1000
     for s in ti.static(range(NUM_SECTORS)):
         d = sensor_distances[oid, s, channel]
-        if d > 0 and d < best_dist:
+        if d > 0 and d < SENSOR_NOTHING and d < best_dist:
             best_dist = d
             best_sector = s
     return ti.Vector([best_sector, best_dist], dt=ti.i32)

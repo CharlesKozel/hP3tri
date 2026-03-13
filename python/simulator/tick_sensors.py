@@ -2,7 +2,7 @@ import taichi as ti
 from simulator.hex_grid import neighbor_offset
 from simulator.cell_types import NUM_CELL_TYPES, CellType
 
-SENSOR_NOTHING: int = int(CellType.NULL)
+SENSOR_NOTHING: int = 9999
 FOOD_TYPE: int = int(CellType.FOOD)
 
 _CH_FOOD: int = 0
