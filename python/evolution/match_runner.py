@@ -107,7 +107,7 @@ def _place_seeds(
             org_id = engine.create_organism(
                 seed_q=q, seed_r=r,
                 seed_cell_type=seed_cell_type,
-                starting_energy=800,
+                starting_energy=50000,
                 genome_id=gid,
                 brain=brain,
                 body_plan=body_plan,

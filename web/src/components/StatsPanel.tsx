@@ -66,7 +66,7 @@ export default function StatsPanel({organisms, currentTick, totalTicks, open, on
         <div style={{
             width: open ? 360 : 0,
             minWidth: open ? 360 : 0,
-            height: '100vh',
+            height: '100%',
             background: '#1a1a1a',
             borderLeft: open ? '1px solid #333' : 'none',
             transition: 'width 0.3s ease, min-width 0.3s ease',

@@ -31,6 +31,7 @@ interface TournamentConfig {
     seed: number;
     showcaseInterval: number;
     saveTopMatchReplays: number;
+    replayEveryNMatches: number;
 }
 
 interface RunJobConfig {
@@ -90,6 +91,7 @@ interface JobForm {
     seed: number;
     showcaseInterval: number;
     saveTopMatchReplays: number;
+    replayEveryNMatches: number;
 }
 
 const DEFAULT_FORM: JobForm = {
@@ -111,6 +113,7 @@ const DEFAULT_FORM: JobForm = {
     seed: 42,
     showcaseInterval: 1,
     saveTopMatchReplays: 10,
+    replayEveryNMatches: 0,
 };
 
 /** Fields synced to/from URL query params (excludes name/description/priority). */
@@ -118,6 +121,7 @@ const URL_FORM_KEYS: (keyof JobForm)[] = [
     'populationSize', 'matchPopulationSize', 'generations', 'matchesPerGeneration',
     'gridWidth', 'gridHeight', 'matchTickLimit', 'previewTickLimit', 'previewGridSize',
     'foodCount', 'foodRespawnRate', 'kFactor', 'seed', 'showcaseInterval', 'saveTopMatchReplays',
+    'replayEveryNMatches',
 ];
 
 function formFromParams(params: URLSearchParams): JobForm {
@@ -226,6 +230,7 @@ export default function QueueDashboard() {
                     seed: form.seed,
                     showcaseInterval: form.showcaseInterval,
                     saveTopMatchReplays: form.saveTopMatchReplays,
+                    replayEveryNMatches: form.replayEveryNMatches,
                 },
             };
             const res = await fetch(`${base}/api/queue/submit`, {
@@ -383,6 +388,7 @@ export default function QueueDashboard() {
                             <Field label="Seed" value={form.seed} onChange={v => updateField('seed', parseInt(v) || 0)} width={70} type="number"/>
                             <Field label="Showcase Int." value={form.showcaseInterval} onChange={v => updateField('showcaseInterval', parseInt(v) || 0)} width={80} type="number"/>
                             <Field label="Top Replays" value={form.saveTopMatchReplays} onChange={v => updateField('saveTopMatchReplays', parseInt(v) || 0)} width={80} type="number"/>
+                            <Field label="Replay Every N" value={form.replayEveryNMatches} onChange={v => updateField('replayEveryNMatches', parseInt(v) || 0)} width={90} type="number"/>
                         </div>
                         <div>
                             <button type="submit" style={btnStyle('#1a5a2a', '#2a8a4a')}>Submit Job</button>
@@ -487,6 +493,7 @@ export default function QueueDashboard() {
                                                     <Stat label="Seed" value={t.seed}/>
                                                     <Stat label="Showcase Int." value={t.showcaseInterval}/>
                                                     <Stat label="Top Replays" value={t.saveTopMatchReplays}/>
+                                                    <Stat label="Replay Every N" value={t.replayEveryNMatches}/>
                                                 </>;
                                             })()}
                                         </div>

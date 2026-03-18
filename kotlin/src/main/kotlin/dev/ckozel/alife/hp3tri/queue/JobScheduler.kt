@@ -247,7 +247,21 @@ class JobScheduler(private val bridge: JepBridge) {
     }
 
     fun getReplayMatch(runId: String, gen: Int, matchIdx: Int): String? {
-        val matchFile = File(runsDir, "$runId/replays/gen_$gen/match_$matchIdx.json")
+        val genDir = File(runsDir, "$runId/replays/gen_$gen")
+        // Look up actual filename from index (supports both match_N.json and showcase_N.json)
+        val indexFile = File(genDir, "index.json")
+        if (indexFile.exists()) {
+            try {
+                val index = json.decodeFromString<dev.ckozel.alife.hp3tri.evolution.ReplayIndex>(indexFile.readText())
+                val entry = index.matches.find { it.matchIndex == matchIdx }
+                if (entry != null) {
+                    val file = File(genDir, entry.filename)
+                    if (file.exists()) return file.readText()
+                }
+            } catch (_: Exception) {}
+        }
+        // Fallback to direct match_N.json lookup
+        val matchFile = File(genDir, "match_$matchIdx.json")
         if (!matchFile.exists()) return null
         return matchFile.readText()
     }

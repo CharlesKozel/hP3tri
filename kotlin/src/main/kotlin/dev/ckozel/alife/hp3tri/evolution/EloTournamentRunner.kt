@@ -34,6 +34,7 @@ data class EloTournamentConfig(
     val seed: Int = 42,
     val saveTopMatchReplays: Int = 5,
     val showcaseInterval: Int = 1,
+    val replayEveryNMatches: Int = 0,  // 0 = disabled; save a replay of the actual match every N matches
 )
 
 @Serializable
@@ -150,6 +151,49 @@ class EloTournamentRunner(
                     updateElo(matchGenome1, matchGenome2, score1, score2)
 
                     matchesCompletedThisGen++
+
+                    // Save periodic replay of this match
+                    if (replayDir != null && config.replayEveryNMatches > 0 && matchIdx % config.replayEveryNMatches == 0) {
+                        try {
+                            val genDir = File(replayDir, "gen_$gen")
+                            genDir.mkdirs()
+                            val frames = bridge.runVisualizableMatch(matchConfig, genomeDicts)
+                            val filename = "match_${matchIdx}.json"
+                            val framesJson = jsonCompact.encodeToString(ListSerializer(SimulationState.serializer()), frames)
+                            File(genDir, filename).writeText(framesJson)
+
+                            // Update index.json incrementally
+                            val indexFile = File(genDir, "index.json")
+                            val existingIndex = if (indexFile.exists()) {
+                                try { jsonCompact.decodeFromString(ReplayIndex.serializer(), indexFile.readText()) }
+                                catch (_: Exception) { null }
+                            } else null
+
+                            val newEntry = ReplayMatchEntry(
+                                matchIndex = matchIdx,
+                                filename = filename,
+                                genomeIds = listOf(matchGenome1.genome.id, matchGenome2.genome.id),
+                                totalTicks = frames.size,
+                            )
+
+                            val updatedMatches = (existingIndex?.matches?.toMutableList() ?: mutableListOf()).apply {
+                                removeAll { it.matchIndex == matchIdx }
+                                add(newEntry)
+                                sortBy { it.matchIndex }
+                            }
+
+                            val index = ReplayIndex(
+                                generation = gen,
+                                gridWidth = config.gridWidth,
+                                gridHeight = config.gridHeight,
+                                tickLimit = config.matchTickLimit,
+                                matches = updatedMatches,
+                            )
+                            indexFile.writeText(jsonCompact.encodeToString(ReplayIndex.serializer(), index))
+                        } catch (e: Exception) {
+                            addLog("Live replay save failed gen $gen match $matchIdx: ${e.message}")
+                        }
+                    }
                 }
 
                 val sorted = population.sortedByDescending { it.elo }
@@ -304,16 +348,23 @@ class EloTournamentRunner(
             if (pairs.size >= config.saveTopMatchReplays) break
         }
 
-        val matchEntries = mutableListOf<ReplayMatchEntry>()
+        // Preserve any live replay entries already in the index
+        val indexFile = File(genDir, "index.json")
+        val existingMatches = if (indexFile.exists()) {
+            try { jsonCompact.decodeFromString(ReplayIndex.serializer(), indexFile.readText()).matches.toMutableList() }
+            catch (_: Exception) { mutableListOf() }
+        } else mutableListOf()
 
-        for ((matchIdx, pair) in pairs.withIndex()) {
+        // Showcase replays use indices 10000+ to avoid colliding with live replay indices
+        for ((i, pair) in pairs.withIndex()) {
             val (entry1, entry2) = pair
+            val showcaseIdx = 10000 + i
             try {
                 val matchConfig = mapOf(
                     "width" to config.gridWidth,
                     "height" to config.gridHeight,
                     "tick_limit" to config.matchTickLimit,
-                    "seed" to config.seed + gen * 10000 + matchIdx,
+                    "seed" to config.seed + gen * 10000 + i,
                     "food_count" to config.foodCount,
                     "food_respawn_rate" to config.foodRespawnRate,
                     "population_size" to config.matchPopulationSize,
@@ -321,29 +372,31 @@ class EloTournamentRunner(
                 val genomeDicts = listOf(entry1.genome.toDict(), entry2.genome.toDict())
                 val frames = bridge.runVisualizableMatch(matchConfig, genomeDicts)
 
-                val filename = "match_$matchIdx.json"
+                val filename = "showcase_$i.json"
                 val framesJson = jsonCompact.encodeToString(ListSerializer(SimulationState.serializer()), frames)
                 File(genDir, filename).writeText(framesJson)
 
-                matchEntries.add(ReplayMatchEntry(
-                    matchIndex = matchIdx,
+                existingMatches.removeAll { it.matchIndex == showcaseIdx }
+                existingMatches.add(ReplayMatchEntry(
+                    matchIndex = showcaseIdx,
                     filename = filename,
                     genomeIds = listOf(entry1.genome.id, entry2.genome.id),
                     totalTicks = frames.size,
                 ))
             } catch (e: Exception) {
-                addLog("Replay save failed gen $gen match $matchIdx: ${e.message}")
+                addLog("Replay save failed gen $gen showcase $i: ${e.message}")
             }
         }
 
+        existingMatches.sortBy { it.matchIndex }
         val index = ReplayIndex(
             generation = gen,
             gridWidth = config.gridWidth,
             gridHeight = config.gridHeight,
             tickLimit = config.matchTickLimit,
-            matches = matchEntries,
+            matches = existingMatches,
         )
-        File(genDir, "index.json").writeText(jsonCompact.encodeToString(ReplayIndex.serializer(), index))
+        indexFile.writeText(jsonCompact.encodeToString(ReplayIndex.serializer(), index))
     }
 
     private fun saveCheckpoint(gen: Int) {

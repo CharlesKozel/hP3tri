@@ -6,7 +6,7 @@ import {getApiBase} from '../api';
 import type {CellTypeInfo, ReplayInfo, SimulationState} from '../types';
 
 export default function MatchViewer() {
-    const [searchParams] = useSearchParams();
+    const [searchParams, setSearchParams] = useSearchParams();
     const [replay, setReplay] = useState<SimulationState[] | null>(null);
     const [replayInfo, setReplayInfo] = useState<ReplayInfo | null>(null);
     const [cellTypes, setCellTypes] = useState<CellTypeInfo[]>([]);
@@ -17,6 +17,8 @@ export default function MatchViewer() {
     const [loading, setLoading] = useState(true);
     const [statsOpen, setStatsOpen] = useState(true);
     const intervalRef = useRef<number | null>(null);
+    const [replayList, setReplayList] = useState<{gen: number; matches: {matchIndex: number; genomeIds: number[]; totalTicks: number}[]}[]>([]);
+    const [replayListOpen, setReplayListOpen] = useState(true);
 
     const fetchReplay = useCallback(async () => {
         setLoading(true);
@@ -118,6 +120,35 @@ export default function MatchViewer() {
             }
         };
     }, [playing, playbackSpeed, replay]);
+
+    useEffect(() => {
+        const runId = searchParams.get('run');
+        if (!runId) return;
+        const base = getApiBase();
+        (async () => {
+            try {
+                const gensRes = await fetch(`${base}/api/queue/runs/${encodeURIComponent(runId)}/replays`);
+                if (!gensRes.ok) return;
+                const gens: number[] = await gensRes.json();
+                const allGens: typeof replayList = [];
+                for (const gen of gens) {
+                    const indexRes = await fetch(`${base}/api/queue/runs/${encodeURIComponent(runId)}/replays/${gen}`);
+                    if (indexRes.ok) {
+                        const index = await indexRes.json();
+                        allGens.push({ gen, matches: index.matches });
+                    }
+                }
+                setReplayList(allGens);
+            } catch { /* ignore */ }
+        })();
+    }, [searchParams]);
+
+    const navigateToReplay = (gen: number, matchIdx: number) => {
+        const params = new URLSearchParams(searchParams);
+        params.set('gen', String(gen));
+        params.set('match', String(matchIdx));
+        setSearchParams(params);
+    };
 
     const handleReset = async () => {
         setPlaying(false);
@@ -234,13 +265,92 @@ export default function MatchViewer() {
                     {frame && <HexGridCanvas grid={frame.grid} organisms={frame.organisms} cellTypes={cellTypes}/>}
                 </div>
             </div>
-            <StatsPanel
-                organisms={frame?.organisms ?? []}
-                currentTick={frame?.tick ?? currentTick}
-                totalTicks={replayInfo.totalTicks}
-                open={statsOpen}
-                onClose={() => setStatsOpen(false)}
-            />
+            {/* Sidebar */}
+            <div style={{
+                width: statsOpen ? 360 : 0,
+                minWidth: statsOpen ? 360 : 0,
+                height: '100vh',
+                background: '#1a1a1a',
+                borderLeft: statsOpen ? '1px solid #333' : 'none',
+                transition: 'width 0.3s ease, min-width 0.3s ease',
+                overflow: 'hidden',
+                display: 'flex',
+                flexDirection: 'column',
+                flexShrink: 0,
+            }}>
+                <div style={{minWidth: 360, display: 'flex', flexDirection: 'column', height: '100%'}}>
+                    {/* Replay Browser */}
+                    {replayList.length > 0 && (
+                        <div style={{
+                            borderBottom: '1px solid #333',
+                            maxHeight: replayListOpen ? 300 : 36,
+                            overflow: 'hidden',
+                            transition: 'max-height 0.2s ease',
+                            flexShrink: 0,
+                        }}>
+                            <div
+                                onClick={() => setReplayListOpen(!replayListOpen)}
+                                style={{
+                                    padding: '8px 16px',
+                                    cursor: 'pointer',
+                                    fontFamily: 'monospace',
+                                    fontSize: 12,
+                                    color: '#888',
+                                    display: 'flex',
+                                    justifyContent: 'space-between',
+                                    alignItems: 'center',
+                                }}
+                            >
+                                <span>Replays ({replayList.reduce((sum, g) => sum + g.matches.length, 0)})</span>
+                                <span>{replayListOpen ? '\u25BC' : '\u25B6'}</span>
+                            </div>
+                            <div style={{overflowY: 'auto', maxHeight: 260, padding: '0 16px 8px'}}>
+                                {replayList.map(genGroup => (
+                                    <div key={genGroup.gen} style={{marginBottom: 8}}>
+                                        <div style={{color: '#666', fontSize: 11, marginBottom: 4, fontFamily: 'monospace'}}>
+                                            Gen {genGroup.gen}
+                                        </div>
+                                        {genGroup.matches.map(m => {
+                                            const currentGen = searchParams.get('gen');
+                                            const currentMatch = searchParams.get('match');
+                                            const isActive = currentGen === String(genGroup.gen) && currentMatch === String(m.matchIndex);
+                                            return (
+                                                <div
+                                                    key={m.matchIndex}
+                                                    onClick={() => navigateToReplay(genGroup.gen, m.matchIndex)}
+                                                    style={{
+                                                        padding: '4px 8px',
+                                                        cursor: 'pointer',
+                                                        borderRadius: 3,
+                                                        background: isActive ? '#2a4a6a' : 'transparent',
+                                                        border: isActive ? '1px solid #4a7aaa' : '1px solid transparent',
+                                                        fontFamily: 'monospace',
+                                                        fontSize: 12,
+                                                        color: isActive ? '#eee' : '#aaa',
+                                                        marginBottom: 2,
+                                                    }}
+                                                >
+                                                    {m.matchIndex >= 10000 ? `Top #${m.matchIndex - 10000}` : `Match ${m.matchIndex}`} — {m.genomeIds.join(' vs ')} ({m.totalTicks}t)
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                    {/* Stats content */}
+                    <div style={{flex: 1, overflow: 'hidden'}}>
+                        <StatsPanel
+                            organisms={frame?.organisms ?? []}
+                            currentTick={frame?.tick ?? currentTick}
+                            totalTicks={replayInfo.totalTicks}
+                            open={true}
+                            onClose={() => setStatsOpen(false)}
+                        />
+                    </div>
+                </div>
+            </div>
         </div>
     );
 }

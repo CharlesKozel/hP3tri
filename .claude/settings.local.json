@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(java -version 2>&1)"
+    ]
+  }
+}
