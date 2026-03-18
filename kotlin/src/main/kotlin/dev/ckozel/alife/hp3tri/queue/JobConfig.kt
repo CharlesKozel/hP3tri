@@ -1,6 +1,7 @@
 package dev.ckozel.alife.hp3tri.queue
 
 import dev.ckozel.alife.hp3tri.evolution.EloTournamentConfig
+import dev.ckozel.alife.hp3tri.evolution.QLearningConfig
 import kotlinx.serialization.Serializable
 
 interface JobRunner {
@@ -21,6 +22,7 @@ data class JobConfig(
     val description: String = "",
     val priority: Int = 0,
     val tournament: EloTournamentConfig = EloTournamentConfig(),
+    val qlearning: QLearningConfig? = null,
     val seedCheckpoint: String? = null,
 )
 
@@ -38,6 +40,8 @@ data class RunStatus(
     val error: String? = null,
     val hasReplays: Boolean = false,
     val config: JobConfig? = null,
+    val seedCheckpoint: String? = null,
+    val jobType: String = "tournament",
 )
 
 data class ActiveRun(

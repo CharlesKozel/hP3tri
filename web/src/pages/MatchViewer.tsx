@@ -30,11 +30,20 @@ export default function MatchViewer() {
             const matchIdx = searchParams.get('match');
             const genomes = searchParams.get('genomes');
             const tournamentMatch = searchParams.get('tournament_match');
+            const qlearningMatch = searchParams.get('qlearning_match');
 
             let replayPromise: Promise<Response>;
             let infoPromise: Promise<Response>;
 
-            if (runId && gen !== null && matchIdx !== null) {
+            if (qlearningMatch) {
+                const genomeIds = qlearningMatch.split(',').map(Number).filter(n => !isNaN(n));
+                replayPromise = fetch(`${base}/api/qlearning/run-match`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({genomeIds, gridWidth: 64, gridHeight: 64, tickLimit: 200}),
+                });
+                infoPromise = replayPromise.then(res => res.clone());
+            } else if (runId && gen !== null && matchIdx !== null) {
                 const url = `${base}/api/queue/runs/${encodeURIComponent(runId)}/replays/${gen}/${matchIdx}`;
                 replayPromise = fetch(url);
                 infoPromise = replayPromise.then(res => res.clone());
@@ -64,7 +73,7 @@ export default function MatchViewer() {
             const types: CellTypeInfo[] = await cellTypesRes.json();
             setCellTypes(types);
 
-            if (runId || genomes || tournamentMatch) {
+            if (runId || genomes || tournamentMatch || qlearningMatch) {
                 const replayRes = await replayPromise;
                 if (!replayRes.ok) throw new Error(`HTTP ${replayRes.status}`);
                 const data = await replayRes.json();

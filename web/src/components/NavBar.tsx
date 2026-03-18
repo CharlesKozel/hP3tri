@@ -37,6 +37,9 @@ export default function NavBar() {
             <NavLink to={`/match${hostQuery}`} style={({isActive}) => isActive ? activeLinkStyle : linkStyle}>
                 Match Viewer
             </NavLink>
+            <NavLink to={`/qlearning${hostQuery}`} style={({isActive}) => isActive ? activeLinkStyle : linkStyle}>
+                Q-Learning
+            </NavLink>
             <NavLink to={`/queue${hostQuery}`} style={({isActive}) => isActive ? activeLinkStyle : linkStyle}>
                 Queue
             </NavLink>

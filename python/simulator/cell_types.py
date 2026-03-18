@@ -1,3 +1,5 @@
+import json
+import os
 from dataclasses import dataclass
 from enum import IntEnum, auto
 from typing import Callable, TypeAlias
@@ -24,6 +26,13 @@ class CellType(IntEnum):
 NUM_CELL_TYPES = len(CellType)
 NUM_ORGANISM_CELL_TYPES = NUM_CELL_TYPES - 2  # exclude NULL and FOOD
 
+_CELL_PROPS_FIELDS = [
+    "maintenance_cost", "growth_cost", "mass", "locomotion_power",
+    "energy_generation", "consumption_value", "color", "display_name",
+    "vision_range", "vision_expansion", "directional", "action_rank",
+    "can_reproduce",
+]
+
 @dataclass(frozen=True)
 class CellProps:
     maintenance_cost: int
@@ -41,18 +50,55 @@ class CellProps:
     can_reproduce: int = 0
 
 
-CELL_PROPERTIES: dict[CellType, CellProps] = {
-    CellType.NULL:           CellProps(0,  0,  0, 0,  0, 0,  '#000000', 'Empty'),
-    CellType.SOFT_TISSUE:    CellProps(1,  2,  1, 0,  0, 1,  '#e8b4a0', 'Soft Tissue', can_reproduce=1),
-    CellType.MOUTH:          CellProps(2,  8,  3, 0,  0, 4,  '#cc3333', 'Mouth', action_rank=4, can_reproduce=1),
-    CellType.FLAGELLA:       CellProps(1,  4,  1, 10, 0, 4,  '#cc88dd', 'Flagella', can_reproduce=1),
-    CellType.EYE:            CellProps(2,  6,  2, 0,  0, 3,  '#ffffff', 'Eye', vision_range=5, vision_expansion=1, directional=1),
-    CellType.SPIKE:          CellProps(3, 12,  4, 0,  0, 6,  '#ff6600', 'Spike', action_rank=3),
-    CellType.FOOD:           CellProps(0, 10,  5, 0,  0, 10, '#66dd66', 'Food'),
-    CellType.PHOTOSYNTHETIC: CellProps(1,  5,  2, 0,  3, 3,  '#33aa33', 'Photosynthetic', can_reproduce=1),
-    CellType.ARMOR:          CellProps(1, 15,  6, 0,  0, 0,  '#8888aa', 'Armor'),
-    CellType.SKIN:           CellProps(1,  3,  2, 0,  0, 1,  '#ddbb88', 'Skin', vision_range=1, can_reproduce=1),
-}
+_CELL_TYPE_BY_NAME: dict[str, CellType] = {ct.name: ct for ct in CellType}
+
+_DEFAULT_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "simulator_config.json")
+
+
+def load_cell_config(path: str | None = None) -> tuple[dict[CellType, CellProps], dict[CellType, set[CellType]], dict[CellType, set[CellType]]]:
+    """Load cell type config from JSON. Every field must be specified explicitly."""
+    if path is None:
+        path = _DEFAULT_CONFIG_PATH
+    with open(path, "r") as f:
+        data = json.load(f)
+
+    props: dict[CellType, CellProps] = {}
+    for ct_name, ct_data in data["cell_types"].items():
+        ct = _CELL_TYPE_BY_NAME[ct_name]
+        missing = [f for f in _CELL_PROPS_FIELDS if f not in ct_data]
+        if missing:
+            raise ValueError(f"Cell type {ct_name} missing fields: {missing}")
+        props[ct] = CellProps(**{f: ct_data[f] for f in _CELL_PROPS_FIELDS})
+
+    missing_types = set(CellType) - set(props.keys())
+    if missing_types:
+        raise ValueError(f"Missing cell types in config: {[t.name for t in missing_types]}")
+
+    can_eat: dict[CellType, set[CellType]] = {}
+    for eater_name, target_names in data.get("can_eat", {}).items():
+        can_eat[_CELL_TYPE_BY_NAME[eater_name]] = {_CELL_TYPE_BY_NAME[t] for t in target_names}
+
+    can_destroy: dict[CellType, set[CellType]] = {}
+    for destroyer_name, target_names in data.get("can_destroy", {}).items():
+        can_destroy[_CELL_TYPE_BY_NAME[destroyer_name]] = {_CELL_TYPE_BY_NAME[t] for t in target_names}
+
+    return props, can_eat, can_destroy
+
+
+def apply_cell_config(path: str | None = None) -> None:
+    """Load config and update module-level CELL_PROPERTIES, CAN_EAT, CAN_DESTROY."""
+    global CELL_PROPERTIES, CAN_EAT, CAN_DESTROY
+    props, eat, destroy = load_cell_config(path)
+    CELL_PROPERTIES = props
+    CAN_EAT = eat
+    CAN_DESTROY = destroy
+
+
+CELL_PROPERTIES: dict[CellType, CellProps]
+CAN_EAT: dict[CellType, set[CellType]]
+CAN_DESTROY: dict[CellType, set[CellType]]
+
+apply_cell_config()
 
 
 def get_cell_type_metadata() -> list[dict[str, object]]:
@@ -82,19 +128,6 @@ def getCellActions(cell_type: CellType) -> CellActionFunc | None:
             return mouth_action
     return None
 
-CAN_EAT: dict[CellType, set[CellType]] = {
-    CellType.MOUTH: {
-        CellType.FOOD, CellType.SOFT_TISSUE, CellType.MOUTH, CellType.FLAGELLA,
-        CellType.EYE, CellType.SPIKE, CellType.PHOTOSYNTHETIC, CellType.SKIN,
-    },
-}
-
-CAN_DESTROY: dict[CellType, set[CellType]] = {
-    CellType.SPIKE: {
-        CellType.SOFT_TISSUE, CellType.MOUTH, CellType.FLAGELLA, CellType.EYE,
-        CellType.SPIKE, CellType.PHOTOSYNTHETIC, CellType.ARMOR, CellType.SKIN,
-    },
-}
 
 def mouth_action(state: HexGridState, org_id: OrganismId, genome_id: GenomeId, target_index: GridIndex) -> list[CellActionResult]:
     raise NotImplemented()

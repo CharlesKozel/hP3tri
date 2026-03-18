@@ -29,12 +29,19 @@ data class EloTournamentConfig(
     val matchPopulationSize: Int = 1,
     val kFactor: Float = 32f,
     val eliteRate: Float = 0.1f,
-    val crossoverRate: Float = 0.2f,
+    val crossoverRate: Float = 0.1f,
     val freshRate: Float = 0.1f,
+    val diversityRate: Float = 0.3f,
     val seed: Int = 42,
     val saveTopMatchReplays: Int = 5,
     val showcaseInterval: Int = 1,
     val replayEveryNMatches: Int = 0,  // 0 = disabled; save a replay of the actual match every N matches
+    val cellCountWeight: Float = 0.25f,
+    val movementWeight: Float = 0.20f,
+    val reproductionWeight: Float = 0.20f,
+    val interactionWeight: Float = 0.20f,
+    val avgCellsWeight: Float = 0.15f,
+    val varyMatchConditions: Boolean = true,
 )
 
 @Serializable
@@ -45,6 +52,11 @@ data class EloGenomeEntry(
     var losses: Int = 0,
     var draws: Int = 0,
     var previewCellCount: Int = 0,
+    var avgMoves: Float = 0f,
+    var avgCellsEaten: Float = 0f,
+    var avgReproductions: Float = 0f,
+    var behaviorX: Float = 0f,
+    var behaviorY: Float = 0f,
 )
 
 @Serializable
@@ -54,6 +66,7 @@ data class EloHistoryEntry(
     val avgElo: Float,
     val medianElo: Float,
     val matchesPlayed: Int,
+    val archiveFillRate: Float = 0f,
 )
 
 class EloTournamentRunner(
@@ -87,6 +100,13 @@ class EloTournamentRunner(
 
     private val previewCache = mutableMapOf<Int, SimulationState>()
 
+    private val diversityArchive = MapElitesArchive(
+        binsX = 8,
+        binsY = 8,
+        rangeX = 0f to 1f,
+        rangeY = 0f to 1f,
+    )
+
     @Volatile
     override var running = false
         private set
@@ -118,7 +138,7 @@ class EloTournamentRunner(
 
                     val idx1 = rng.nextInt(population.size)
                     var idx2 = rng.nextInt(population.size - 1)
-                    if (idx2 >= idx1) idx2++ // prevent same index from playing itself, while keeping selection prob the same
+                    if (idx2 >= idx1) idx2++
 
                     val matchGenome1 = population[idx1]
                     val matchGenome2 = population[idx2]
@@ -128,17 +148,18 @@ class EloTournamentRunner(
 
                     val results = bridge.runEvolutionMatch(matchConfig, genomeDicts)
 
-                    val cells1 = (results[0]["final_cell_count"] as Number).toInt()
-                    val cells2 = (results[1]["final_cell_count"] as Number).toInt()
+                    val actualTickLimit = (matchConfig["tick_limit"] as Number).toInt()
+                    val compositeScore1 = computeMatchScore(results[0], results[1], actualTickLimit)
+                    val compositeScore2 = computeMatchScore(results[1], results[0], actualTickLimit)
 
                     val score1: Float
                     val score2: Float
                     when {
-                        cells1 > cells2 -> {
+                        compositeScore1 > compositeScore2 -> {
                             score1 = 1f; score2 = 0f
                             matchGenome1.wins++; matchGenome2.losses++
                         }
-                        cells2 > cells1 -> {
+                        compositeScore2 > compositeScore1 -> {
                             score1 = 0f; score2 = 1f
                             matchGenome2.wins++; matchGenome1.losses++
                         }
@@ -149,6 +170,12 @@ class EloTournamentRunner(
                     }
 
                     updateElo(matchGenome1, matchGenome2, score1, score2)
+
+                    updateBehaviorStats(matchGenome1, results[0], actualTickLimit)
+                    updateBehaviorStats(matchGenome2, results[1], actualTickLimit)
+
+                    diversityArchive.add(matchGenome1.genome, matchGenome1.elo, Pair(matchGenome1.behaviorX, matchGenome1.behaviorY))
+                    diversityArchive.add(matchGenome2.genome, matchGenome2.elo, Pair(matchGenome2.behaviorX, matchGenome2.behaviorY))
 
                     matchesCompletedThisGen++
 
@@ -208,6 +235,7 @@ class EloTournamentRunner(
                 val topElo = sorted.first().elo
                 val avgElo = population.map { it.elo }.average().toFloat()
                 val medianElo = sorted[sorted.size / 2].elo
+                val archiveFill = diversityArchive.fillRate()
 
                 historyEntries.add(EloHistoryEntry(
                     generation = gen,
@@ -215,12 +243,18 @@ class EloTournamentRunner(
                     avgElo = avgElo,
                     medianElo = medianElo,
                     matchesPlayed = config.matchesPerGeneration,
+                    archiveFillRate = archiveFill,
                 ))
 
+                val top = sorted.first()
                 val msg = "Gen $gen | top ELO: ${"%.0f".format(topElo)}" +
                         " | avg: ${"%.0f".format(avgElo)}" +
                         " | median: ${"%.0f".format(medianElo)}" +
-                        " | #1: genome ${sorted.first().genome.id} (${sorted.first().wins}W/${sorted.first().losses}L)"
+                        " | archive: ${"%.0f".format(archiveFill * 64)}/64" +
+                        " | #1: genome ${top.genome.id}" +
+                        " (${top.wins}W/${top.losses}L" +
+                        " moves=${"%.0f".format(top.avgMoves)}" +
+                        " eaten=${"%.0f".format(top.avgCellsEaten)})"
                 addLog(msg)
                 println(msg)
 
@@ -249,6 +283,61 @@ class EloTournamentRunner(
         }
     }
 
+    private fun computeMatchScore(
+        result: Map<String, Any>,
+        opponentResult: Map<String, Any>,
+        tickLimit: Int,
+    ): Float {
+        val myCells = (result["final_cell_count"] as Number).toFloat()
+        val oppCells = (opponentResult["final_cell_count"] as Number).toFloat()
+        val cellFraction = myCells / maxOf(1f, myCells + oppCells)
+
+        val moves = (result["total_moves"] as? Number)?.toFloat() ?: 0f
+        val moveRate = (moves / tickLimit).coerceAtMost(1f)
+
+        val repro = (result["total_reproductions"] as? Number)?.toFloat() ?: 0f
+        val reproRate = (repro / (tickLimit / 50f)).coerceAtMost(1f)
+
+        val eaten = (result["total_cells_eaten"] as? Number)?.toFloat() ?: 0f
+        val destroyed = (result["total_cells_destroyed"] as? Number)?.toFloat() ?: 0f
+        val interactionRate = ((eaten + destroyed) / (tickLimit / 10f)).coerceAtMost(1f)
+
+        val myAvg = (result["avg_cell_count"] as? Number)?.toFloat() ?: 0f
+        val oppAvg = (opponentResult["avg_cell_count"] as? Number)?.toFloat() ?: 0f
+        val avgFraction = myAvg / maxOf(1f, myAvg + oppAvg)
+
+        return config.cellCountWeight * cellFraction +
+                config.movementWeight * moveRate +
+                config.reproductionWeight * reproRate +
+                config.interactionWeight * interactionRate +
+                config.avgCellsWeight * avgFraction
+    }
+
+    private fun updateBehaviorStats(
+        entry: EloGenomeEntry,
+        result: Map<String, Any>,
+        tickLimit: Int,
+    ) {
+        val alpha = 0.3f
+        val moves = (result["total_moves"] as? Number)?.toFloat() ?: 0f
+        val eaten = (result["total_cells_eaten"] as? Number)?.toFloat() ?: 0f
+        val destroyed = (result["total_cells_destroyed"] as? Number)?.toFloat() ?: 0f
+        val repro = (result["total_reproductions"] as? Number)?.toFloat() ?: 0f
+        val peakCells = (result["peak_cell_count"] as? Number)?.toFloat() ?: 1f
+        val orgCount = (result["organism_count"] as? Number)?.toFloat() ?: 1f
+
+        entry.avgMoves = entry.avgMoves * (1 - alpha) + moves * alpha
+        entry.avgCellsEaten = entry.avgCellsEaten * (1 - alpha) + eaten * alpha
+        entry.avgReproductions = entry.avgReproductions * (1 - alpha) + repro * alpha
+
+        val interaction = ((eaten + destroyed) / maxOf(1f, peakCells * tickLimit / 100f)).coerceIn(0f, 1f)
+        val mobilityRepro = (0.5f * (moves / maxOf(1f, tickLimit.toFloat())) +
+                0.5f * (repro / maxOf(1f, orgCount * 2f))).coerceIn(0f, 1f)
+
+        entry.behaviorX = entry.behaviorX * (1 - alpha) + interaction * alpha
+        entry.behaviorY = entry.behaviorY * (1 - alpha) + mobilityRepro * alpha
+    }
+
     private fun updateElo(
         entry1: EloGenomeEntry,
         entry2: EloGenomeEntry,
@@ -266,7 +355,8 @@ class EloTournamentRunner(
         val eliteCount = (config.populationSize * config.eliteRate).toInt()
         val freshCount = (config.populationSize * config.freshRate).toInt()
         val crossoverCount = (config.populationSize * config.crossoverRate).toInt()
-        val mutationCount = config.populationSize - eliteCount - crossoverCount - freshCount
+        val diversityCount = (config.populationSize * config.diversityRate).toInt()
+        val mutationCount = config.populationSize - eliteCount - crossoverCount - freshCount - diversityCount
 
         val result = mutableListOf<EloGenomeEntry>()
 
@@ -290,6 +380,17 @@ class EloTournamentRunner(
             val p2 = tournamentSelect()
             val child = crossover(p1, p2, nextGenomeId++, rng)
             result.add(EloGenomeEntry(genome = child))
+        }
+
+        val diverseParents = diversityArchive.sampleDiverse(diversityCount, rng)
+        for (parent in diverseParents) {
+            val child = mutate(parent, rng).copy(id = nextGenomeId++)
+            result.add(EloGenomeEntry(genome = child))
+        }
+        if (diverseParents.size < diversityCount) {
+            repeat(diversityCount - diverseParents.size) {
+                result.add(EloGenomeEntry(genome = randomGenome(nextGenomeId++, rng)))
+            }
         }
 
         repeat(freshCount) {
@@ -412,15 +513,41 @@ class EloTournamentRunner(
         addLog("Checkpoint saved: $path")
     }
 
-    private fun buildMatchConfig(generation: Int, matchIndex: Int): Map<String, Any> = mapOf(
-        "width" to config.gridWidth,
-        "height" to config.gridHeight,
-        "tick_limit" to config.matchTickLimit,
-        "seed" to config.seed + generation * 1000 + matchIndex,
-        "food_count" to config.foodCount,
-        "food_respawn_rate" to config.foodRespawnRate,
-        "population_size" to config.matchPopulationSize,
-    )
+    private fun buildMatchConfig(generation: Int, matchIndex: Int): Map<String, Any> {
+        val matchSeed = config.seed + generation * 1000 + matchIndex
+
+        if (!config.varyMatchConditions) {
+            return mapOf(
+                "width" to config.gridWidth,
+                "height" to config.gridHeight,
+                "tick_limit" to config.matchTickLimit,
+                "seed" to matchSeed,
+                "food_count" to config.foodCount,
+                "food_respawn_rate" to config.foodRespawnRate,
+                "population_size" to config.matchPopulationSize,
+            )
+        }
+
+        val matchRng = Random(matchSeed.toLong())
+        val foodVariation = (config.foodCount * 0.3).toInt()
+        val foodCount = (config.foodCount + matchRng.nextInt(foodVariation * 2 + 1) - foodVariation).coerceAtLeast(10)
+
+        val tickVariation = (config.matchTickLimit * 0.2).toInt()
+        val tickLimit = (config.matchTickLimit + matchRng.nextInt(tickVariation * 2 + 1) - tickVariation).coerceAtLeast(100)
+
+        val respawnVariation = (config.foodRespawnRate * 0.5).toInt().coerceAtLeast(1)
+        val respawnRate = (config.foodRespawnRate + matchRng.nextInt(respawnVariation * 2 + 1) - respawnVariation).coerceAtLeast(1)
+
+        return mapOf(
+            "width" to config.gridWidth,
+            "height" to config.gridHeight,
+            "tick_limit" to tickLimit,
+            "seed" to matchSeed,
+            "food_count" to foodCount,
+            "food_respawn_rate" to respawnRate,
+            "population_size" to config.matchPopulationSize,
+        )
+    }
 
     private fun addLog(msg: String) {
         synchronized(_log) {

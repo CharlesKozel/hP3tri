@@ -2,6 +2,7 @@ package dev.ckozel.alife.hp3tri.server
 
 import dev.ckozel.alife.hp3tri.bridge.JepBridge
 import dev.ckozel.alife.hp3tri.evolution.EloTournamentRunner
+import dev.ckozel.alife.hp3tri.evolution.QLearningRunner
 import dev.ckozel.alife.hp3tri.genome.toDict
 import dev.ckozel.alife.hp3tri.queue.CurrentRunResponse
 import dev.ckozel.alife.hp3tri.queue.JobConfig
@@ -51,6 +52,9 @@ data class EloLeaderboardEntry(
     val draws: Int,
     val previewCellCount: Int,
     val symmetryMode: Int,
+    val avgMoves: Float = 0f,
+    val avgCellsEaten: Float = 0f,
+    val avgReproductions: Float = 0f,
 )
 
 @Serializable
@@ -60,6 +64,7 @@ data class EloHistoryResponse(
     val avgElo: Float,
     val medianElo: Float,
     val matchesPlayed: Int,
+    val archiveFillRate: Float = 0f,
 )
 
 @Serializable
@@ -180,6 +185,9 @@ fun startServer(bridge: JepBridge, port: Int = 8080) {
                         draws = entry.draws,
                         previewCellCount = entry.previewCellCount,
                         symmetryMode = entry.genome.symmetryMode,
+                        avgMoves = entry.avgMoves,
+                        avgCellsEaten = entry.avgCellsEaten,
+                        avgReproductions = entry.avgReproductions,
                     )
                 }
                 call.respond(entries)
@@ -199,6 +207,7 @@ fun startServer(bridge: JepBridge, port: Int = 8080) {
                         avgElo = h.avgElo,
                         medianElo = h.medianElo,
                         matchesPlayed = h.matchesPlayed,
+                        archiveFillRate = h.archiveFillRate,
                     )
                 }
                 call.respond(entries)
@@ -397,6 +406,53 @@ fun startServer(bridge: JepBridge, port: Int = 8080) {
                     return@get
                 }
                 call.respondText("{\"frames\":$matchData}", ContentType.Application.Json)
+            }
+
+            // Q-Learning routes
+            get("/api/qlearning/checkpoints") {
+                val checkpoints = mutableListOf<Map<String, String>>()
+                val dirs = scheduler.runsDir.listFiles { f -> f.isDirectory } ?: emptyArray()
+                for (dir in dirs) {
+                    val cpDir = File(dir, "checkpoints")
+                    val ptFiles = cpDir.listFiles { f -> f.extension == "pt" } ?: continue
+                    for (pt in ptFiles.sortedByDescending { it.name }) {
+                        checkpoints.add(mapOf(
+                            "runId" to dir.name,
+                            "filename" to pt.name,
+                            "path" to pt.absolutePath,
+                        ))
+                    }
+                }
+                call.respond(checkpoints)
+            }
+
+            get("/api/qlearning/status") {
+                val runner = scheduler.currentRun?.runner
+                if (runner == null || runner !is QLearningRunner) {
+                    call.respond(HttpStatusCode.NotFound, "No Q-learning job running")
+                    return@get
+                }
+                call.respond(runner.getTrainingStats())
+            }
+
+            post("/api/qlearning/run-match") {
+                val request = call.receive<RunMatchRequest>()
+                val genomes = request.genomeIds.map { id ->
+                    mapOf<String, Any>("id" to id, "seed_cell_type" to id)
+                }
+                val matchConfig = mapOf<String, Any>(
+                    "width" to request.gridWidth,
+                    "height" to request.gridHeight,
+                    "tick_limit" to request.tickLimit,
+                    "seed" to 42,
+                    "food_count" to 40,
+                    "food_respawn_rate" to 3,
+                    "food_respawn_interval" to 20,
+                    "population_size" to 1,
+                    "snapshot_interval" to 3,
+                )
+                val frames = bridge.runQLearningVisualizableMatch(matchConfig, genomes)
+                call.respond(mapOf("frames" to frames))
             }
 
             val webDist = File("web/dist")

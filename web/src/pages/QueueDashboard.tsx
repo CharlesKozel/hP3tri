@@ -5,6 +5,12 @@ import type {ReplayIndex} from '../types';
 
 const POLL_INTERVAL = 3000;
 
+interface QLCheckpoint {
+    runId: string;
+    filename: string;
+    path: string;
+}
+
 interface PendingJob {
     filename: string;
     config: {
@@ -54,6 +60,8 @@ interface RunStatus {
     error: string | null;
     hasReplays: boolean;
     config: RunJobConfig | null;
+    seedCheckpoint: string | null;
+    jobType: string;
 }
 
 interface RunSummary {
@@ -72,10 +80,14 @@ interface CurrentRun {
     matchesCompleted: number;
 }
 
+type JobType = 'tournament' | 'qlearning';
+
 interface JobForm {
+    jobType: JobType;
     name: string;
     description: string;
     priority: number;
+    // Tournament fields
     populationSize: number;
     matchPopulationSize: number;
     generations: number;
@@ -92,9 +104,17 @@ interface JobForm {
     showcaseInterval: number;
     saveTopMatchReplays: number;
     replayEveryNMatches: number;
+    // Q-Learning fields
+    qlTotalMatches: number;
+    qlGenomesPerMatch: number;
+    qlTrainingSteps: number;
+    qlBatchSize: number;
+    qlFoodCount: number;
+    seedCheckpoint: string;
 }
 
 const DEFAULT_FORM: JobForm = {
+    jobType: 'tournament',
     name: '',
     description: '',
     priority: 0,
@@ -106,7 +126,7 @@ const DEFAULT_FORM: JobForm = {
     gridHeight: 64,
     matchTickLimit: 100,
     previewTickLimit: 100,
-    previewGridSize: 64,
+    previewGridSize: 128,
     foodCount: 80,
     foodRespawnRate: 5,
     kFactor: 32,
@@ -114,6 +134,12 @@ const DEFAULT_FORM: JobForm = {
     showcaseInterval: 1,
     saveTopMatchReplays: 10,
     replayEveryNMatches: 0,
+    qlTotalMatches: 5000,
+    qlGenomesPerMatch: 4,
+    qlTrainingSteps: 32,
+    qlBatchSize: 64,
+    qlFoodCount: 80,
+    seedCheckpoint: '',
 };
 
 /** Fields synced to/from URL query params (excludes name/description/priority). */
@@ -169,6 +195,7 @@ export default function QueueDashboard() {
     const [replayGens, setReplayGens] = useState<number[]>([]);
     const [selectedGen, setSelectedGen] = useState<number | null>(null);
     const [replayIndex, setReplayIndex] = useState<ReplayIndex | null>(null);
+    const [checkpoints, setCheckpoints] = useState<QLCheckpoint[]>([]);
     const pollRef = useRef<number | null>(null);
 
     const base = getApiBase();
@@ -177,10 +204,11 @@ export default function QueueDashboard() {
 
     const fetchAll = useCallback(async () => {
         try {
-            const [pendingRes, runsRes, currentRes] = await Promise.all([
+            const [pendingRes, runsRes, currentRes, cpRes] = await Promise.all([
                 fetch(`${base}/api/queue/pending`),
                 fetch(`${base}/api/queue/runs`),
                 fetch(`${base}/api/queue/current`),
+                fetch(`${base}/api/qlearning/checkpoints`),
             ]);
             if (pendingRes.ok) setPending(await pendingRes.json());
             if (runsRes.ok) setRuns(await runsRes.json());
@@ -189,6 +217,7 @@ export default function QueueDashboard() {
             } else {
                 setCurrent(null);
             }
+            if (cpRes.ok) setCheckpoints(await cpRes.json());
             setError(null);
         } catch (err) {
             setError(err instanceof Error ? err.message : String(err));
@@ -210,11 +239,28 @@ export default function QueueDashboard() {
             return;
         }
         try {
-            const body = {
+            const body: Record<string, unknown> = {
                 name: form.name.trim(),
                 description: form.description,
                 priority: form.priority,
-                tournament: {
+            };
+            if (form.seedCheckpoint) {
+                body.seedCheckpoint = form.seedCheckpoint;
+            }
+            if (form.jobType === 'qlearning') {
+                body.qlearning = {
+                    totalMatches: form.qlTotalMatches,
+                    gridWidth: form.gridWidth,
+                    gridHeight: form.gridHeight,
+                    matchTickLimit: form.matchTickLimit,
+                    foodCount: form.qlFoodCount,
+                    genomesPerMatch: form.qlGenomesPerMatch,
+                    trainingStepsPerMatch: form.qlTrainingSteps,
+                    batchSize: form.qlBatchSize,
+                    seed: form.seed,
+                };
+            } else {
+                body.tournament = {
                     populationSize: form.populationSize,
                     matchPopulationSize: form.matchPopulationSize,
                     generations: form.generations,
@@ -231,8 +277,8 @@ export default function QueueDashboard() {
                     showcaseInterval: form.showcaseInterval,
                     saveTopMatchReplays: form.saveTopMatchReplays,
                     replayEveryNMatches: form.replayEveryNMatches,
-                },
-            };
+                };
+            }
             const res = await fetch(`${base}/api/queue/submit`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -363,33 +409,96 @@ export default function QueueDashboard() {
                 {/* Submit New Run */}
                 <Section title="Submit New Run">
                     <form onSubmit={handleSubmit} style={{display: 'flex', flexDirection: 'column', gap: 10}}>
-                        <div style={{display: 'flex', gap: 10, flexWrap: 'wrap'}}>
+                        <div style={{display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end'}}>
+                            <label style={{display: 'flex', flexDirection: 'column', gap: 2}}>
+                                <span style={{color: '#888', fontSize: 11}}>Type</span>
+                                <select
+                                    value={form.jobType}
+                                    onChange={e => updateField('jobType', e.target.value)}
+                                    style={{
+                                        padding: '4px 6px',
+                                        background: '#222',
+                                        color: '#ccc',
+                                        border: '1px solid #444',
+                                        borderRadius: 3,
+                                        fontFamily: 'monospace',
+                                        fontSize: 12,
+                                    }}
+                                >
+                                    <option value="tournament">Tournament</option>
+                                    <option value="qlearning">Q-Learning</option>
+                                </select>
+                            </label>
                             <Field label="Name" value={form.name} onChange={v => updateField('name', v)} width={200}/>
                             <Field label="Priority" value={form.priority} onChange={v => updateField('priority', parseInt(v) || 0)} width={60} type="number"/>
                             <Field label="Description" value={form.description} onChange={v => updateField('description', v)} width={300}/>
                         </div>
-                        <div style={{display: 'flex', gap: 10, flexWrap: 'wrap'}}>
-                            <Field label="Pop Size" value={form.populationSize} onChange={v => updateField('populationSize', parseInt(v) || 0)} width={70} type="number"/>
-                            <Field label="Seeds/Genome" value={form.matchPopulationSize} onChange={v => updateField('matchPopulationSize', parseInt(v) || 0)} width={80} type="number"/>
-                            <Field label="Generations" value={form.generations} onChange={v => updateField('generations', parseInt(v) || 0)} width={70} type="number"/>
-                            <Field label="Matches/Gen" value={form.matchesPerGeneration} onChange={v => updateField('matchesPerGeneration', parseInt(v) || 0)} width={80} type="number"/>
-                            <Field label="K Factor" value={form.kFactor} onChange={v => updateField('kFactor', parseInt(v) || 0)} width={60} type="number"/>
-                        </div>
-                        <div style={{display: 'flex', gap: 10, flexWrap: 'wrap'}}>
-                            <Field label="Grid W" value={form.gridWidth} onChange={v => updateField('gridWidth', parseInt(v) || 0)} width={60} type="number"/>
-                            <Field label="Grid H" value={form.gridHeight} onChange={v => updateField('gridHeight', parseInt(v) || 0)} width={60} type="number"/>
-                            <Field label="Match Ticks" value={form.matchTickLimit} onChange={v => updateField('matchTickLimit', parseInt(v) || 0)} width={80} type="number"/>
-                            <Field label="Preview Ticks" value={form.previewTickLimit} onChange={v => updateField('previewTickLimit', parseInt(v) || 0)} width={80} type="number"/>
-                            <Field label="Preview Grid" value={form.previewGridSize} onChange={v => updateField('previewGridSize', parseInt(v) || 0)} width={80} type="number"/>
-                        </div>
-                        <div style={{display: 'flex', gap: 10, flexWrap: 'wrap'}}>
-                            <Field label="Food" value={form.foodCount} onChange={v => updateField('foodCount', parseInt(v) || 0)} width={60} type="number"/>
-                            <Field label="Food Respawn" value={form.foodRespawnRate} onChange={v => updateField('foodRespawnRate', parseInt(v) || 0)} width={80} type="number"/>
-                            <Field label="Seed" value={form.seed} onChange={v => updateField('seed', parseInt(v) || 0)} width={70} type="number"/>
-                            <Field label="Showcase Int." value={form.showcaseInterval} onChange={v => updateField('showcaseInterval', parseInt(v) || 0)} width={80} type="number"/>
-                            <Field label="Top Replays" value={form.saveTopMatchReplays} onChange={v => updateField('saveTopMatchReplays', parseInt(v) || 0)} width={80} type="number"/>
-                            <Field label="Replay Every N" value={form.replayEveryNMatches} onChange={v => updateField('replayEveryNMatches', parseInt(v) || 0)} width={90} type="number"/>
-                        </div>
+                        {form.jobType === 'tournament' ? (
+                            <>
+                                <div style={{display: 'flex', gap: 10, flexWrap: 'wrap'}}>
+                                    <Field label="Pop Size" value={form.populationSize} onChange={v => updateField('populationSize', parseInt(v) || 0)} width={70} type="number"/>
+                                    <Field label="Seeds/Genome" value={form.matchPopulationSize} onChange={v => updateField('matchPopulationSize', parseInt(v) || 0)} width={80} type="number"/>
+                                    <Field label="Generations" value={form.generations} onChange={v => updateField('generations', parseInt(v) || 0)} width={70} type="number"/>
+                                    <Field label="Matches/Gen" value={form.matchesPerGeneration} onChange={v => updateField('matchesPerGeneration', parseInt(v) || 0)} width={80} type="number"/>
+                                    <Field label="K Factor" value={form.kFactor} onChange={v => updateField('kFactor', parseInt(v) || 0)} width={60} type="number"/>
+                                </div>
+                                <div style={{display: 'flex', gap: 10, flexWrap: 'wrap'}}>
+                                    <Field label="Grid W" value={form.gridWidth} onChange={v => updateField('gridWidth', parseInt(v) || 0)} width={60} type="number"/>
+                                    <Field label="Grid H" value={form.gridHeight} onChange={v => updateField('gridHeight', parseInt(v) || 0)} width={60} type="number"/>
+                                    <Field label="Match Ticks" value={form.matchTickLimit} onChange={v => updateField('matchTickLimit', parseInt(v) || 0)} width={80} type="number"/>
+                                    <Field label="Preview Ticks" value={form.previewTickLimit} onChange={v => updateField('previewTickLimit', parseInt(v) || 0)} width={80} type="number"/>
+                                    <Field label="Preview Grid" value={form.previewGridSize} onChange={v => updateField('previewGridSize', parseInt(v) || 0)} width={80} type="number"/>
+                                </div>
+                                <div style={{display: 'flex', gap: 10, flexWrap: 'wrap'}}>
+                                    <Field label="Food" value={form.foodCount} onChange={v => updateField('foodCount', parseInt(v) || 0)} width={60} type="number"/>
+                                    <Field label="Food Respawn" value={form.foodRespawnRate} onChange={v => updateField('foodRespawnRate', parseInt(v) || 0)} width={80} type="number"/>
+                                    <Field label="Seed" value={form.seed} onChange={v => updateField('seed', parseInt(v) || 0)} width={70} type="number"/>
+                                    <Field label="Showcase Int." value={form.showcaseInterval} onChange={v => updateField('showcaseInterval', parseInt(v) || 0)} width={80} type="number"/>
+                                    <Field label="Top Replays" value={form.saveTopMatchReplays} onChange={v => updateField('saveTopMatchReplays', parseInt(v) || 0)} width={80} type="number"/>
+                                    <Field label="Replay Every N" value={form.replayEveryNMatches} onChange={v => updateField('replayEveryNMatches', parseInt(v) || 0)} width={90} type="number"/>
+                                </div>
+                            </>
+                        ) : (
+                            <>
+                                <div style={{display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end'}}>
+                                    <Field label="Total Matches" value={form.qlTotalMatches} onChange={v => updateField('qlTotalMatches', parseInt(v) || 0)} width={90} type="number"/>
+                                    <Field label="Genomes/Match" value={form.qlGenomesPerMatch} onChange={v => updateField('qlGenomesPerMatch', parseInt(v) || 0)} width={90} type="number"/>
+                                    <Field label="Food Count" value={form.qlFoodCount} onChange={v => updateField('qlFoodCount', parseInt(v) || 0)} width={80} type="number"/>
+                                    <label style={{display: 'flex', flexDirection: 'column', gap: 2}}>
+                                        <span style={{color: '#888', fontSize: 11}}>Resume From</span>
+                                        <select
+                                            value={form.seedCheckpoint}
+                                            onChange={e => updateField('seedCheckpoint', e.target.value)}
+                                            style={{
+                                                padding: '4px 6px',
+                                                background: '#222',
+                                                color: '#ccc',
+                                                border: '1px solid #444',
+                                                borderRadius: 3,
+                                                fontFamily: 'monospace',
+                                                fontSize: 12,
+                                                maxWidth: 280,
+                                            }}
+                                        >
+                                            <option value="">Fresh start</option>
+                                            {checkpoints.map(cp => (
+                                                <option key={cp.path} value={cp.path}>
+                                                    {cp.runId.slice(0, 20)}... / {cp.filename}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </label>
+                                </div>
+                                <div style={{display: 'flex', gap: 10, flexWrap: 'wrap'}}>
+                                    <Field label="Grid W" value={form.gridWidth} onChange={v => updateField('gridWidth', parseInt(v) || 0)} width={60} type="number"/>
+                                    <Field label="Grid H" value={form.gridHeight} onChange={v => updateField('gridHeight', parseInt(v) || 0)} width={60} type="number"/>
+                                    <Field label="Match Ticks" value={form.matchTickLimit} onChange={v => updateField('matchTickLimit', parseInt(v) || 0)} width={80} type="number"/>
+                                    <Field label="Train Steps" value={form.qlTrainingSteps} onChange={v => updateField('qlTrainingSteps', parseInt(v) || 0)} width={80} type="number"/>
+                                    <Field label="Batch Size" value={form.qlBatchSize} onChange={v => updateField('qlBatchSize', parseInt(v) || 0)} width={80} type="number"/>
+                                    <Field label="Seed" value={form.seed} onChange={v => updateField('seed', parseInt(v) || 0)} width={70} type="number"/>
+                                </div>
+                            </>
+                        )}
                         <div>
                             <button type="submit" style={btnStyle('#1a5a2a', '#2a8a4a')}>Submit Job</button>
                         </div>
@@ -447,10 +556,20 @@ export default function QueueDashboard() {
                                         flexWrap: 'wrap',
                                     }}>
                                         <StatusBadge state={run.status.state}/>
-                                        <span style={{color: '#ddd', minWidth: 120}}>{run.status.jobName}</span>
+                                        <span style={{
+                                            color: run.status.jobType === 'qlearning' ? '#c8c' : '#ddd',
+                                            minWidth: 120,
+                                        }}>
+                                            {run.status.jobType === 'qlearning' ? '[QL] ' : ''}{run.status.jobName}
+                                        </span>
                                         <Stat label="Gen" value={`${run.status.generation}/${run.status.totalGenerations}`}/>
                                         <Stat label="Best" value={run.status.bestFitness.toFixed(1)}/>
                                         <Stat label="Archive" value={`${(run.status.archiveFillRate * 100).toFixed(0)}%`}/>
+                                        {run.status.seedCheckpoint && (
+                                            <span style={{color: '#886', fontSize: 11}} title={run.status.seedCheckpoint}>
+                                                resumed
+                                            </span>
+                                        )}
                                         <button onClick={() => handleViewLog(run.runId)} style={btnStyle('#1a2a3a', '#2a4a6a')}>
                                             {expandedLog === run.runId ? 'Hide Log' : 'Log'}
                                         </button>
