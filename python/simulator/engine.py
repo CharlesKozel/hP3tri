@@ -513,6 +513,44 @@ class SimulationEngine:
             own_cell_counts=cell_counts,
         )
 
+    def build_sensor_inputs_from_numpy(
+        self,
+        org_id: int,
+        sd_np: np.ndarray,
+        energy_np: np.ndarray,
+        age_np: np.ndarray,
+        ct_counts_np: np.ndarray,
+        max_range: int,
+    ) -> SensorInputs:
+        """Fast sensor input builder using pre-read numpy arrays."""
+        raw = sd_np[org_id].astype(np.float32)
+        # Match original build_sensor_inputs normalization exactly
+        for s in range(NUM_SECTORS):
+            for c in range(NUM_CHANNELS):
+                val = raw[s, c]
+                if c == CH_OPEN_SPACE:
+                    raw[s, c] = min(val, 1.0)
+                elif val >= SENSOR_NOTHING:
+                    raw[s, c] = 1.0
+                else:
+                    raw[s, c] = val / max_range if max_range > 0 else 1.0
+        return SensorInputs(
+            sector_data=raw,
+            own_energy=float(energy_np[org_id]) / 1000.0,
+            own_age=float(age_np[org_id]) / 1000.0,
+            own_cell_counts=ct_counts_np[org_id].astype(np.int32),
+        )
+
+    def bulk_read_sensor_arrays(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, int]:
+        """Read all arrays needed for sensor input construction in one shot."""
+        n = self.next_org_id
+        sd_np = self.sensor_distances.to_numpy()[:n]
+        energy_np = self.organisms.energy.to_numpy()[:n]
+        age_np = self.organisms.age.to_numpy()[:n]
+        ct_counts_np = self.organisms.cell_type_counts.to_numpy()[:n]
+        max_range = max(self.width, self.height) // 2
+        return sd_np, energy_np, age_np, ct_counts_np, max_range
+
     # ── Step 3: Brain evaluation ────────────────────────────────
 
     def _build_organism_view(
@@ -607,15 +645,20 @@ class SimulationEngine:
                 organisms[oid].brain_reproduce_cell_idx = result
 
     def _step_brains_cpu(self) -> None:
-        """Original CPU-based brain evaluation (fallback)."""
+        """CPU-based brain evaluation using bulk numpy reads."""
         ct_np = self.grid.cell_type.to_numpy()
         oid_np = self.grid.organism_id.to_numpy()
+        sd_np, energy_np, age_np, ct_counts_np, max_range = self.bulk_read_sensor_arrays()
+        alive_np = self.organisms.alive.to_numpy()[:self.next_org_id]
+
         for org_id in range(1, self.next_org_id):
-            if self.organisms[org_id].alive == DEAD:
+            if alive_np[org_id] == DEAD:
                 continue
 
             brain = self.organism_brain_map.get(org_id, self.default_brain)
-            sensors = self.build_sensor_inputs(org_id)
+            sensors = self.build_sensor_inputs_from_numpy(
+                org_id, sd_np, energy_np, age_np, ct_counts_np, max_range,
+            )
             view = self._build_organism_view(org_id, ct_np, oid_np)
             genome_id = self.organism_genome_map.get(org_id, 0)
             genome_data = self.genome_registry.get(genome_id, {})

@@ -44,21 +44,30 @@ class RewardTracker:
         self.transition_count: int = 0
 
     def snapshot_before(self, engine: SimulationEngine) -> None:
-        """Capture organism counters before a tick."""
+        """Capture organism counters before a tick using bulk numpy reads."""
         self.snapshots.clear()
-        for org_id in range(1, engine.next_org_id):
-            org = engine.organisms[org_id]
-            if int(org.alive) == 0:
+        n = engine.next_org_id
+        alive_np = engine.organisms.alive.to_numpy()[:n]
+        eaten_np = engine.organisms.lifetime_cells_eaten.to_numpy()[:n]
+        destroyed_np = engine.organisms.lifetime_cells_destroyed.to_numpy()[:n]
+        moves_np = engine.organisms.lifetime_moves.to_numpy()[:n]
+        repro_np = engine.organisms.lifetime_reproductions.to_numpy()[:n]
+        grown_np = engine.organisms.lifetime_cells_grown.to_numpy()[:n]
+        energy_np = engine.organisms.energy.to_numpy()[:n]
+        cell_count_np = engine.organisms.cell_count.to_numpy()[:n]
+
+        for org_id in range(1, n):
+            if int(alive_np[org_id]) == 0:
                 continue
             self.snapshots[org_id] = OrganismSnapshot(
-                cells_eaten=int(org.lifetime_cells_eaten),
-                cells_destroyed=int(org.lifetime_cells_destroyed),
-                moves=int(org.lifetime_moves),
-                reproductions=int(org.lifetime_reproductions),
-                cells_grown=int(org.lifetime_cells_grown),
-                energy=int(org.energy),
-                cell_count=int(org.cell_count),
-                alive=int(org.alive),
+                cells_eaten=int(eaten_np[org_id]),
+                cells_destroyed=int(destroyed_np[org_id]),
+                moves=int(moves_np[org_id]),
+                reproductions=int(repro_np[org_id]),
+                cells_grown=int(grown_np[org_id]),
+                energy=int(energy_np[org_id]),
+                cell_count=int(cell_count_np[org_id]),
+                alive=1,
             )
 
     def process_tick(
@@ -67,19 +76,37 @@ class RewardTracker:
         is_terminal: bool,
     ) -> None:
         """Compute rewards from counter diffs and store transitions."""
+        from interfaces.brain import OrganismView
+
+        # Bulk-read all needed organism fields once
+        n = engine.next_org_id
+        alive_np = engine.organisms.alive.to_numpy()[:n]
+        eaten_np = engine.organisms.lifetime_cells_eaten.to_numpy()[:n]
+        destroyed_np = engine.organisms.lifetime_cells_destroyed.to_numpy()[:n]
+        moves_np = engine.organisms.lifetime_moves.to_numpy()[:n]
+        repro_np = engine.organisms.lifetime_reproductions.to_numpy()[:n]
+        grown_np = engine.organisms.lifetime_cells_grown.to_numpy()[:n]
+        cell_count_np = engine.organisms.cell_count.to_numpy()[:n]
+        energy_np = engine.organisms.energy.to_numpy()[:n]
+        age_np = engine.organisms.age.to_numpy()[:n]
+        mass_np = engine.organisms.total_mass.to_numpy()[:n]
+        loco_np = engine.organisms.locomotion_power.to_numpy()[:n]
+
+        # Bulk-read sensor arrays once for all organisms
+        sd_np, s_energy_np, s_age_np, ct_counts_np, max_range = engine.bulk_read_sensor_arrays()
+
         for org_id, snap in self.snapshots.items():
             if org_id not in self.brain.organism_states:
                 continue
 
             state, move_action, grow_action = self.brain.organism_states[org_id]
-            org = engine.organisms[org_id]
-            alive_now = int(org.alive)
+            alive_now = int(alive_np[org_id])
 
-            d_eaten = int(org.lifetime_cells_eaten) - snap.cells_eaten
-            d_destroyed = int(org.lifetime_cells_destroyed) - snap.cells_destroyed
-            d_moves = int(org.lifetime_moves) - snap.moves
-            d_repro = int(org.lifetime_reproductions) - snap.reproductions
-            d_grown = int(org.lifetime_cells_grown) - snap.cells_grown
+            d_eaten = int(eaten_np[org_id]) - snap.cells_eaten
+            d_destroyed = int(destroyed_np[org_id]) - snap.cells_destroyed
+            d_moves = int(moves_np[org_id]) - snap.moves
+            d_repro = int(repro_np[org_id]) - snap.reproductions
+            d_grown = int(grown_np[org_id]) - snap.cells_grown
 
             reward = (
                 REWARD_EAT * d_eaten
@@ -93,18 +120,19 @@ class RewardTracker:
             done = alive_now == 0 or is_terminal
 
             if done and alive_now == 1:
-                reward += REWARD_TERMINAL_PER_CELL * int(org.cell_count)
+                reward += REWARD_TERMINAL_PER_CELL * int(cell_count_np[org_id])
 
-            sensors = engine.build_sensor_inputs(org_id) if alive_now == 1 else None
-            if sensors is not None:
-                from interfaces.brain import OrganismView
+            if alive_now == 1:
+                sensors = engine.build_sensor_inputs_from_numpy(
+                    org_id, sd_np, s_energy_np, s_age_np, ct_counts_np, max_range,
+                )
                 view = OrganismView(
                     organism_id=org_id,
-                    age=int(org.age),
-                    energy=int(org.energy),
-                    cell_count=int(org.cell_count),
-                    total_mass=int(org.total_mass),
-                    locomotion_power=int(org.locomotion_power),
+                    age=int(age_np[org_id]),
+                    energy=int(energy_np[org_id]),
+                    cell_count=int(cell_count_np[org_id]),
+                    total_mass=int(mass_np[org_id]),
+                    locomotion_power=int(loco_np[org_id]),
                     cells=[],
                     grid_width=engine.width,
                     grid_height=engine.height,

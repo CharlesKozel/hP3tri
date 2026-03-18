@@ -531,13 +531,31 @@ def run_qlearning_match(
     _place_food(engine, food_count, rng)
     engine.recompute_aggregates()
 
+    _match_t0 = _time.perf_counter()
+    _t_snapshot = 0.0
+    _t_step = 0.0
+    _t_process = 0.0
     for tick in range(tick_limit):
+        _ta = _time.perf_counter()
         tracker.snapshot_before(engine)
+        _tb = _time.perf_counter()
+        _t_snapshot += _tb - _ta
+
         engine.step()
+        _tc = _time.perf_counter()
+        _t_step += _tc - _tb
+
         tracker.process_tick(engine, is_terminal=(tick == tick_limit - 1))
+        _td = _time.perf_counter()
+        _t_process += _td - _tc
 
         if food_respawn_interval > 0 and tick > 0 and tick % food_respawn_interval == 0:
             _place_food(engine, food_respawn_rate, rng)
+    _match_elapsed = _time.perf_counter() - _match_t0
+    _tps = tick_limit / _match_elapsed if _match_elapsed > 0 else 0
+    print(f"  [QL Match] {tick_limit} ticks in {_match_elapsed:.2f}s ({_tps:.0f} t/s)"
+          f"  step={_t_step:.2f}s  snapshot={_t_snapshot:.2f}s  process={_t_process:.2f}s",
+          flush=True)
 
     avg_reward = tracker.get_avg_reward()
 
