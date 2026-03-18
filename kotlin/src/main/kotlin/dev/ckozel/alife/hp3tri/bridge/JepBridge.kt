@@ -18,6 +18,7 @@ class JepBridge(pythonSourceDir: String) {
             exec("from simulator.sim_runner import run_simulation")
             exec("from simulator.cell_types import get_cell_type_metadata")
             exec("from evolution.match_runner import run_evolution_match, run_visualizable_match, run_genome_preview")
+            exec("from evolution.match_runner import run_qlearning_match, run_qlearning_visualizable_match")
         }
     }
 
@@ -109,6 +110,41 @@ class JepBridge(pythonSourceDir: String) {
         interpreter.exec("_preview_result = run_genome_preview(dict(_preview_config), dict(_preview_genome))")
         @Suppress("UNCHECKED_CAST")
         interpreter.getValue("_preview_result") as Map<String, Any>
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    fun runQLearningMatch(config: Map<String, Any>, genomes: List<Map<String, Any>>): Map<String, Any> = runOnJepThread {
+        interpreter.set("_ql_config", config)
+        interpreter.set("_ql_genomes", genomes)
+        interpreter.exec("_ql_result = run_qlearning_match(dict(_ql_config), [dict(g) for g in _ql_genomes])")
+        interpreter.getValue("_ql_result") as Map<String, Any>
+    }
+
+    fun runQLearningVisualizableMatch(config: Map<String, Any>, genomes: List<Map<String, Any>>): List<SimulationState> = runOnJepThread {
+        interpreter.set("_qlv_config", config)
+        interpreter.set("_qlv_genomes", genomes)
+        interpreter.exec("_qlv_result = run_qlearning_visualizable_match(dict(_qlv_config), [dict(g) for g in _qlv_genomes])")
+        @Suppress("UNCHECKED_CAST")
+        val result = interpreter.getValue("_qlv_result") as List<Map<String, Any>>
+        result.map { convertFrame(it) }
+    }
+
+    fun saveQLearningModel(path: String) = runOnJepThread {
+        interpreter.set("_ql_save_path", path)
+        interpreter.exec("""
+            from brains.q_brain import get_trainer
+            _trainer = get_trainer()
+            _trainer.save(_ql_save_path)
+        """.trimIndent())
+    }
+
+    fun loadQLearningModel(path: String) = runOnJepThread {
+        interpreter.set("_ql_load_path", path)
+        interpreter.exec("""
+            from brains.q_brain import get_trainer
+            _trainer = get_trainer()
+            _trainer.load(_ql_load_path)
+        """.trimIndent())
     }
 
     fun close() {

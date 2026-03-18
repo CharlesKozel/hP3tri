@@ -397,3 +397,179 @@ def run_genome_previews_batch(
     genome_dicts: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     return [run_genome_preview(config, gd) for gd in genome_dicts]
+
+
+# ── Q-Learning match support ──────────────────────────────────
+
+
+def _setup_qlearning_genome(
+    engine: SimulationEngine,
+    genome_dict: dict[str, Any],
+    brain: "QBrain",
+) -> tuple[int, int]:
+    """Register a Q-learning genome (just seed cell type) with the engine."""
+    from brains.q_brain import QBrain as _QBrain
+    gid = int(genome_dict["id"])
+    seed_cell_type = int(genome_dict.get("seed_cell_type", int(CellType.SOFT_TISSUE)))
+    engine.genome_registry[gid] = {"mode": "qlearning"}
+    return gid, seed_cell_type
+
+
+def run_qlearning_match(
+    config: dict[str, Any],
+    genome_dicts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Run a match using the shared Q-learning brain, collecting rewards and training."""
+    from brains.q_brain import get_trainer, QBrain, QTrainerConfig
+    from brains.reward_tracker import RewardTracker
+
+    width: int = config.get("width", 64)
+    height: int = config.get("height", 64)
+    tick_limit: int = config.get("tick_limit", 200)
+    seed: int = config.get("seed", 42)
+    food_count: int = config.get("food_count", 80)
+    food_respawn_rate: int = config.get("food_respawn_rate", 5)
+    food_respawn_interval: int = config.get("food_respawn_interval", 20)
+    population_size: int = config.get("population_size", 1)
+    training_steps: int = config.get("training_steps_per_match", 32)
+    batch_size: int = config.get("batch_size", 64)
+
+    trainer_cfg_dict = config.get("trainer_config", {})
+    trainer_cfg = QTrainerConfig(**trainer_cfg_dict) if trainer_cfg_dict else None
+    trainer = get_trainer(trainer_cfg)
+
+    brain = QBrain(trainer)
+    tracker = RewardTracker(trainer, brain)
+
+    rng = np.random.default_rng(seed)
+    engine = _get_engine(width, height, seed)
+    engine.use_gpu_brain = False
+
+    genome_ids: list[int] = []
+    genome_infos: list[tuple[int, None, QBrain, int]] = []
+    for gd in genome_dicts:
+        gid, seed_ct = _setup_qlearning_genome(engine, gd, brain)
+        genome_ids.append(gid)
+        genome_infos.append((gid, None, brain, seed_ct))
+
+    # Place seeds using the same helper (body_plan param unused for Q-learning)
+    total_needed = population_size * len(genome_infos)
+    org_ids_by_genome: dict[int, list[int]] = {gid: [] for gid in genome_ids}
+    for _ in range(population_size):
+        for gid, _, qbrain, seed_cell_type in genome_infos:
+            pos = _find_empty_cell(engine, rng)
+            if pos is None:
+                return {"error": f"Failed to place organism for genome {gid}"}
+            q, r = pos
+            org_id = engine.create_organism(
+                seed_q=q, seed_r=r,
+                seed_cell_type=seed_cell_type,
+                starting_energy=800,
+                genome_id=gid,
+                brain=qbrain,
+                body_plan=None,
+            )
+            engine.genome_registry[gid]["origin_q"] = q
+            engine.genome_registry[gid]["origin_r"] = r
+            org_ids_by_genome[gid].append(org_id)
+
+    _place_food(engine, food_count, rng)
+    engine.recompute_aggregates()
+
+    for tick in range(tick_limit):
+        tracker.snapshot_before(engine)
+        engine.step()
+        tracker.process_tick(engine, is_terminal=(tick == tick_limit - 1))
+
+        if food_respawn_interval > 0 and tick > 0 and tick % food_respawn_interval == 0:
+            _place_food(engine, food_respawn_rate, rng)
+
+    avg_reward = tracker.get_avg_reward()
+
+    total_loss = 0.0
+    for _ in range(training_steps):
+        total_loss += trainer.train_step(batch_size)
+    avg_loss = total_loss / max(training_steps, 1)
+
+    total_cells = 0
+    for gid in genome_ids:
+        total_cells += _count_genome_cells(engine, gid)
+    avg_cells = total_cells / max(len(genome_ids), 1)
+
+    trainer.record_match_stats(avg_reward, avg_cells)
+
+    results: list[dict[str, Any]] = []
+    tick_count = engine.tick_count
+    for gid in genome_ids:
+        final_cells = _count_genome_cells(engine, gid)
+        stats = _compute_genome_stats(engine, gid, tick_count)
+        results.append({
+            "genome_id": gid,
+            "final_cell_count": final_cells,
+            "survived": final_cells > 0,
+            **stats,
+        })
+
+    return {
+        "genome_results": results,
+        "training_stats": trainer.get_stats(),
+        "match_avg_reward": round(avg_reward, 4),
+        "match_avg_loss": round(avg_loss, 6),
+    }
+
+
+def run_qlearning_visualizable_match(
+    config: dict[str, Any],
+    genome_dicts: list[dict[str, Any]],
+) -> list[dict]:
+    """Run a Q-learning match with replay capture (greedy, no training)."""
+    from brains.q_brain import get_trainer, QBrain
+    from brains.reward_tracker import RewardTracker
+
+    width: int = config.get("width", 64)
+    height: int = config.get("height", 64)
+    tick_limit: int = config.get("tick_limit", 200)
+    seed: int = config.get("seed", 42)
+    food_count: int = config.get("food_count", 80)
+    food_respawn_rate: int = config.get("food_respawn_rate", 5)
+    food_respawn_interval: int = config.get("food_respawn_interval", 20)
+    population_size: int = config.get("population_size", 1)
+    snapshot_interval: int = config.get("snapshot_interval", 3)
+
+    trainer = get_trainer()
+    brain = QBrain(trainer, epsilon=0.0)
+
+    rng = np.random.default_rng(seed)
+    engine = _get_engine(width, height, seed)
+    engine.use_gpu_brain = False
+
+    for gd in genome_dicts:
+        gid, seed_ct = _setup_qlearning_genome(engine, gd, brain)
+        for _ in range(population_size):
+            pos = _find_empty_cell(engine, rng)
+            if pos is None:
+                return []
+            q, r = pos
+            engine.create_organism(
+                seed_q=q, seed_r=r,
+                seed_cell_type=seed_ct,
+                starting_energy=800,
+                genome_id=gid,
+                brain=brain,
+                body_plan=None,
+            )
+            engine.genome_registry[gid]["origin_q"] = q
+            engine.genome_registry[gid]["origin_r"] = r
+
+    _place_food(engine, food_count, rng)
+    engine.recompute_aggregates()
+
+    replay: list[dict] = [engine.snapshot()]
+    for tick in range(tick_limit):
+        engine.step()
+        if tick % snapshot_interval == 0 or tick == tick_limit - 1:
+            replay.append(engine.snapshot())
+        if food_respawn_interval > 0 and tick > 0 and tick % food_respawn_interval == 0:
+            _place_food(engine, food_respawn_rate, rng)
+
+    return replay

@@ -2,6 +2,7 @@ package dev.ckozel.alife.hp3tri.queue
 
 import dev.ckozel.alife.hp3tri.bridge.JepBridge
 import dev.ckozel.alife.hp3tri.evolution.EloTournamentRunner
+import dev.ckozel.alife.hp3tri.evolution.QLearningRunner
 import kotlinx.coroutines.*
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -161,23 +162,40 @@ class JobScheduler(private val bridge: JepBridge) {
         val replayDir = File(runDir, "replays")
         val startedAt = Instant.now().toString()
 
-        val runner = EloTournamentRunner(
-            bridge = bridge,
-            config = config.tournament,
-            checkpointDir = checkpointDir.path,
-            replayDir = replayDir.path,
-            onLog = { msg ->
-                try {
-                    logFile.appendText("$msg\n")
-                } catch (_: Exception) {}
-            },
-            onGenerationComplete = { _ ->
-                try {
-                    val active = currentRun ?: return@EloTournamentRunner
+        val onLogCallback = { msg: String ->
+            try {
+                logFile.appendText("$msg\n")
+            } catch (_: Exception) {}
+        }
+        val onGenCallback = { _: Int ->
+            try {
+                val active = currentRun
+                if (active != null) {
                     writeStatus(runDir, buildStatus(active, "running"))
-                } catch (_: Exception) {}
-            },
-        )
+                }
+            } catch (_: Exception) {}
+        }
+
+        val runner: JobRunner = if (config.qlearning != null) {
+            QLearningRunner(
+                bridge = bridge,
+                config = config.qlearning,
+                checkpointDir = checkpointDir.path,
+                seedCheckpoint = config.seedCheckpoint,
+                replayDir = replayDir.path,
+                onLog = onLogCallback,
+                onGenerationComplete = onGenCallback,
+            )
+        } else {
+            EloTournamentRunner(
+                bridge = bridge,
+                config = config.tournament,
+                checkpointDir = checkpointDir.path,
+                replayDir = replayDir.path,
+                onLog = onLogCallback,
+                onGenerationComplete = onGenCallback,
+            )
+        }
 
         val active = ActiveRun(
             runId = runId,
@@ -265,6 +283,8 @@ class JobScheduler(private val bridge: JepBridge) {
             startedAt = active.startedAt,
             updatedAt = Instant.now().toString(),
             hasReplays = replaysDir.isDirectory && (replaysDir.list()?.isNotEmpty() == true),
+            seedCheckpoint = active.jobConfig.seedCheckpoint,
+            jobType = if (active.jobConfig.qlearning != null) "qlearning" else "tournament",
         )
     }
 
