@@ -184,20 +184,30 @@ def run_evolution_match(
     if error is not None:
         return [{"error": error}]
 
+    tick_count = engine.tick_count
     results: list[dict[str, Any]] = []
     for gid in genome_ids:
         final_cells = _count_genome_cells(engine, gid)
         final_energy = _sum_genome_energy(engine, gid)
         mobility, aggression = _compute_behavior_descriptors(engine, gid)
+        stats = _compute_genome_stats(engine, gid, tick_count)
 
         results.append({
             "genome_id": gid,
             "final_cell_count": final_cells,
             "survived": final_cells > 0,
-            "peak_cell_count": final_cells,
+            "peak_cell_count": stats["peak_cell_count"],
+            "avg_cell_count": stats["avg_cell_count"],
             "final_energy": final_energy,
             "mobility": float(mobility),
             "aggression": float(aggression),
+            "total_cells_eaten": stats["total_cells_eaten"],
+            "total_cells_destroyed": stats["total_cells_destroyed"],
+            "total_moves": stats["total_moves"],
+            "total_reproductions": stats["total_reproductions"],
+            "total_cells_grown": stats["total_cells_grown"],
+            "organism_count": stats["organism_count"],
+            "alive_organism_count": stats["alive_organism_count"],
         })
 
     return results
@@ -245,6 +255,53 @@ def _sum_genome_energy(engine: SimulationEngine, genome_id: int) -> int:
                 and engine.organisms[oid].alive == 1):
             total += int(engine.organisms[oid].energy)
     return total
+
+
+def _compute_genome_stats(
+    engine: SimulationEngine,
+    genome_id: int,
+    tick_count: int,
+) -> dict[str, Any]:
+    """Aggregate lifetime stats across all organisms (alive and dead) of a genome."""
+    total_eaten = 0
+    total_destroyed = 0
+    total_moves = 0
+    total_reproductions = 0
+    total_cells_grown = 0
+    peak_cells = 0
+    cumulative_cells = 0
+    org_count = 0
+    alive_count = 0
+
+    for oid in range(1, engine.next_org_id):
+        if engine.organism_genome_map.get(oid) != genome_id:
+            continue
+        org = engine.organisms[oid]
+        org_count += 1
+        if org.alive == 1:
+            alive_count += 1
+        total_eaten += int(org.lifetime_cells_eaten)
+        total_destroyed += int(org.lifetime_cells_destroyed)
+        total_moves += int(org.lifetime_moves)
+        total_reproductions += int(org.lifetime_reproductions)
+        total_cells_grown += int(org.lifetime_cells_grown)
+        peak_cells = max(peak_cells, int(org.peak_cell_count))
+        cumulative_cells += int(org.cumulative_cell_count)
+
+    divisor = max(1, tick_count * org_count)
+    avg_cells = cumulative_cells / divisor
+
+    return {
+        "total_cells_eaten": total_eaten,
+        "total_cells_destroyed": total_destroyed,
+        "total_moves": total_moves,
+        "total_reproductions": total_reproductions,
+        "total_cells_grown": total_cells_grown,
+        "peak_cell_count": peak_cells,
+        "avg_cell_count": float(avg_cells),
+        "organism_count": org_count,
+        "alive_organism_count": alive_count,
+    }
 
 
 def _compute_behavior_descriptors(

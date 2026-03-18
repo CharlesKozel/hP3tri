@@ -207,6 +207,7 @@ def deduct_movement_costs(
     if organisms[oid].can_move == 1:
         organisms[oid].movement_points -= organisms[oid].total_mass
         organisms[oid].energy -= get_movement_energy_cost(organisms[oid])
+        ti.atomic_add(organisms[oid].lifetime_moves, 1)
 
 
 

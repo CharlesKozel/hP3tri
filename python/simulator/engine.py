@@ -108,6 +108,14 @@ class Organism:
     needs_connectivity_check: ti.i8
     cell_type_counts: ti.types.vector(NUM_CELL_TYPES, ti.i32)
 
+    lifetime_cells_eaten: ti.i32
+    lifetime_cells_destroyed: ti.i32
+    lifetime_moves: ti.i32
+    lifetime_reproductions: ti.i32
+    lifetime_cells_grown: ti.i32
+    peak_cell_count: ti.i32
+    cumulative_cell_count: ti.i32
+
 
 @ti.data_oriented
 class SimulationEngine:
@@ -371,6 +379,12 @@ class SimulationEngine:
                 ti.atomic_add(org[oid].upkeep_cost, ct_maintenance[ct])
                 ti.atomic_add(org[oid].energy_generation, ct_energy_gen[ct])
                 ti.atomic_add(org[oid].cell_type_counts[ct], 1)
+        # Update lifetime peak and cumulative cell counts
+        for oid in range(next_org_id):
+            if org[oid].alive == 1:
+                cc = org[oid].cell_count
+                ti.atomic_max(org[oid].peak_cell_count, cc)
+                org[oid].cumulative_cell_count += cc
 
     def apply_resources(self) -> None:
         self._kernel_apply_resources(self.organisms, self.next_org_id)

@@ -51,6 +51,9 @@ data class EloLeaderboardEntry(
     val draws: Int,
     val previewCellCount: Int,
     val symmetryMode: Int,
+    val avgMoves: Float = 0f,
+    val avgCellsEaten: Float = 0f,
+    val avgReproductions: Float = 0f,
 )
 
 @Serializable
@@ -60,6 +63,7 @@ data class EloHistoryResponse(
     val avgElo: Float,
     val medianElo: Float,
     val matchesPlayed: Int,
+    val archiveFillRate: Float = 0f,
 )
 
 @Serializable
@@ -171,6 +175,9 @@ fun startServer(bridge: JepBridge, port: Int = 8080) {
                         draws = entry.draws,
                         previewCellCount = entry.previewCellCount,
                         symmetryMode = entry.genome.symmetryMode,
+                        avgMoves = entry.avgMoves,
+                        avgCellsEaten = entry.avgCellsEaten,
+                        avgReproductions = entry.avgReproductions,
                     )
                 }
                 call.respond(entries)
@@ -190,6 +197,7 @@ fun startServer(bridge: JepBridge, port: Int = 8080) {
                         avgElo = h.avgElo,
                         medianElo = h.medianElo,
                         matchesPlayed = h.matchesPlayed,
+                        archiveFillRate = h.archiveFillRate,
                     )
                 }
                 call.respond(entries)

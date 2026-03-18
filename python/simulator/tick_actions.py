@@ -147,6 +147,7 @@ def execute_action_claims(
                 target_oid = grid[idx].organism_id
                 energy_gained = ct_consumption_value[target_ct]
                 ti.atomic_add(organisms[actor_oid].energy, energy_gained)
+                ti.atomic_add(organisms[actor_oid].lifetime_cells_eaten, 1)
                 if target_oid > 0:
                     organisms[target_oid].needs_connectivity_check = ti.cast(1, ti.i8)
                 grid[idx].cell_type = ti.cast(0, ti.i8)
@@ -157,6 +158,7 @@ def execute_action_claims(
             # DESTROY: destroy cell, no energy gain
             target_ct = ti.cast(grid[idx].cell_type, ti.i32)
             if target_ct > 0:
+                ti.atomic_add(organisms[actor_oid].lifetime_cells_destroyed, 1)
                 target_oid = grid[idx].organism_id
                 if target_oid > 0:
                     organisms[target_oid].needs_connectivity_check = ti.cast(1, ti.i8)
@@ -174,6 +176,7 @@ def execute_action_claims(
                 if organisms[actor_oid].energy >= total_cost:
                     ti.atomic_sub(organisms[actor_oid].energy, total_cost)
                     reproduce_buffer[idx] = actor_oid
+                    ti.atomic_add(organisms[actor_oid].lifetime_reproductions, 1)
 
         elif claimed_rank == GROWTH_RANK:
             # GROWTH: place new cell for existing organism
@@ -185,6 +188,7 @@ def execute_action_claims(
                     ti.atomic_sub(organisms[actor_oid].energy, cost)
                     grid[idx].cell_type = ti.cast(grow_type, ti.i8)
                     grid[idx].organism_id = actor_oid
+                    ti.atomic_add(organisms[actor_oid].lifetime_cells_grown, 1)
 
 
 @ti.func
